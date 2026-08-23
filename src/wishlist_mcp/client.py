@@ -86,9 +86,25 @@ def _message_for(status: int, body: dict) -> str:
             "client settings."
         )
     if status == 404:
-        return f"{message} Try wishlist_search_people to find the right username first."
+        return (
+            f"{_sentence(message)} Try wishlist_search_people to find the right "
+            "username first."
+        )
     if status >= 500:
         return "wishlist is having trouble right now. Try again in a moment."
+    return message
+
+
+def _sentence(message: str) -> str:
+    """End the API's message properly before appending to it.
+
+    The API is inconsistent about trailing punctuation, and "User not found Try
+    wishlist_search_people" is the kind of seam a model reads as one garbled
+    sentence.
+    """
+    message = message.strip()
+    if message and message[-1] not in ".!?":
+        return f"{message}."
     return message
 
 
