@@ -211,3 +211,63 @@ def test_x_forwarded_proto_is_trusted():
     )
 
     assert seen["scheme"] == "https"
+
+
+# --- the Accept header -------------------------------------------------------
+
+
+HANDSHAKE = rpc(
+    "initialize",
+    {
+        "protocolVersion": "2025-06-18",
+        "capabilities": {},
+        "clientInfo": {"name": "t", "version": "1"},
+    },
+)
+
+
+def initialize(client, bearer, accept):
+    """One handshake, with whatever Accept the caller wants to test."""
+    headers = {"Authorization": bearer}
+    if accept is not None:
+        headers["Accept"] = accept
+    return client.post("/mcp", json=HANDSHAKE, headers=headers)
+
+
+@pytest.mark.parametrize(
+    "accept",
+    ["*/*", "application/*", "*/*;q=0.8", None, "", "  "],
+    ids=["star", "application-star", "star-with-q", "absent", "empty", "blank"],
+)
+def test_an_accept_that_admits_json_reaches_the_tools(client, bearer, accept):
+    """FastMCP matches Accept by substring, so a client that sends `*/*` gets
+    told to accept application/json, which it already does. Plain curl sends
+    `*/*`, so this is the first thing anyone hits."""
+    response = initialize(client, bearer, accept)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["result"]["serverInfo"]["name"] == "wishlist"
+
+
+def test_a_named_json_accept_is_left_alone(client, bearer):
+    """The spec-correct header must keep working untouched."""
+    response = initialize(client, bearer, "application/json, text/event-stream")
+
+    assert response.status_code == 200, response.text
+
+
+def test_a_client_that_only_reads_sse_is_still_refused(client, bearer):
+    """Widening is only for headers that already admit JSON. This one does not,
+    and its 406 is the right answer, not a bug to paper over."""
+    response = initialize(client, bearer, "text/event-stream")
+
+    assert response.status_code == 406
+
+
+def test_a_wildcard_accept_without_a_token_still_gets_401(client):
+    """Ordering check. Widening sits inside the auth gate, so an anonymous
+    caller learns where to authorize instead of hearing about a header."""
+    response = client.post("/mcp", json=HANDSHAKE, headers={"Accept": "*/*"})
+
+    assert response.status_code == 401
+    assert "resource_metadata" in response.headers["WWW-Authenticate"]
