@@ -295,7 +295,12 @@ async def test_an_unknown_username_says_what_to_do_next(call):
     with pytest.raises(ToolError) as excinfo:
         await call("wishlist_get_profile", {"username": "nobody"})
 
-    assert "wishlist_search_people" in str(excinfo.value)
+    message = str(excinfo.value)
+    assert "wishlist_search_people" in message
+    # The API is inconsistent about trailing punctuation, and the join is what a
+    # model reads. "User not found Try wishlist_search_people" is one garbled
+    # sentence, not two.
+    assert "User not found. Try" in message
 
 
 @respx.mock
