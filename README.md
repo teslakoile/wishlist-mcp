@@ -10,6 +10,10 @@ https://mcp.wishlist.fit/mcp
 Connect it from [app.wishlist.fit/connect](https://app.wishlist.fit/connect), which has
 per-client setup steps. You need a wishlist account first; this server never creates one.
 
+[docs/connecting.md](docs/connecting.md) has the longer version: exact commands for each
+client, what has actually been verified against production, and the two Codex flags that
+waste an afternoon if you get them wrong.
+
 ## What it is
 
 A pure OAuth 2.1 **resource server** in front of the wishlist REST API. It holds no
