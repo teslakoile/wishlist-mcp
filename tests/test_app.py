@@ -169,7 +169,9 @@ def test_the_guard_names_where_the_server_actually_lives():
 
 
 def test_health_answers_without_a_token(client):
-    assert client.get("/healthz").json() == {"status": "ok"}
+    """Deliberately not /healthz: Cloud Run's frontend answers that path itself
+    and the request never reaches the container."""
+    assert client.get("/_health").json() == {"status": "ok"}
 
 
 def test_the_server_refuses_to_start_without_an_issuer(monkeypatch):

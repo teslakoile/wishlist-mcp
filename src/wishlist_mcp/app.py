@@ -56,9 +56,9 @@ def create_app() -> Starlette:
     app = Starlette(
         routes=[
             Route(settings.metadata_path(), protected_resource_metadata),
-            # Health is outside the host guard's concern but inside the app, so
-            # Cloud Run can probe the service by its own run.app URL.
-            Route("/healthz", health),
+            # Not /healthz: Cloud Run's frontend answers that path itself and
+            # the request never reaches the container.
+            Route("/_health", health),
             # Mounted at the root with the MCP app owning its own path. Mounting
             # at the path instead makes Starlette redirect /mcp to /mcp/, and
             # the address every client is handed has no trailing slash.
