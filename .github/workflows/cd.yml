@@ -1,0 +1,50 @@
+name: CD
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: cd-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  PROJECT_ID: wishlist-484707
+  REGION: asia-southeast1
+  SERVICE: wishlist-mcp
+  IMAGE: asia-southeast1-docker.pkg.dev/wishlist-484707/cloud-run-source-deploy/wishlist-mcp
+
+jobs:
+  deploy:
+    name: Build & Deploy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker
+        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+
+      - name: Build and push
+        run: |
+          IMAGE_TAG="${{ env.IMAGE }}:sha-$(git rev-parse --short HEAD)"
+          echo "IMAGE_TAG=$IMAGE_TAG" >> "$GITHUB_ENV"
+          docker build -t "$IMAGE_TAG" .
+          docker push "$IMAGE_TAG"
+
+      - name: Deploy
+        run: |
+          gcloud run deploy ${{ env.SERVICE }} \
+            --image="${{ env.IMAGE_TAG }}" \
+            --region=${{ env.REGION }} \
+            --project=${{ env.PROJECT_ID }}

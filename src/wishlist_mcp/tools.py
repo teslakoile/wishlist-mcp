@@ -1,0 +1,329 @@
+"""The fourteen wishlist tools.
+
+Parity is the rule: this exposes what the authenticated user can already do by
+hand in the web app, with no agent-only privileges and nothing the app cannot do
+either. Every tool maps onto an endpoint the website itself calls, so an agent
+and a browser cannot reach different answers.
+
+Docstrings here are the interface. They are what the calling model reads to
+choose a tool, and they are the only guardrail on the write tools that
+annotations do not already provide. Treat edits to them as interface changes.
+"""
+
+from fastmcp import FastMCP
+from fastmcp.exceptions import ToolError
+from fastmcp.server.dependencies import get_http_headers
+
+from wishlist_mcp.auth import InvalidAccessToken, authenticate
+from wishlist_mcp.client import WishlistAPI
+from wishlist_mcp.schemas import (
+    AcceptedInvite,
+    CircleMember,
+    CreatedInvite,
+    DeletedItem,
+    GiftGuide,
+    GiftProfile,
+    InvitePreview,
+    Item,
+    MyItem,
+    MyProfile,
+    Person,
+    Priority,
+    Visibility,
+)
+
+READ = {"readOnlyHint": True, "openWorldHint": False}
+WRITE = {"readOnlyHint": False, "destructiveHint": False, "openWorldHint": False}
+WRITE_IDEMPOTENT = {**WRITE, "idempotentHint": True}
+DESTRUCTIVE = {"readOnlyHint": False, "destructiveHint": True, "openWorldHint": False}
+
+SEARCH_LIMIT = 20
+
+
+def api() -> WishlistAPI:
+    """A client carrying this caller's token.
+
+    Verified here as well as by the wishlist API. This server has to check the
+    audience itself, because a token minted for some other resource must not
+    open this one, and only this server knows what its own resource URI is.
+    """
+    # get_http_headers() strips `authorization` by default, since forwarding it
+    # downstream is usually wrong. Here it is exactly the point.
+    header = get_http_headers(include={"authorization"}).get("authorization")
+    try:
+        authenticate(header)
+    except InvalidAccessToken as exc:
+        raise ToolError(
+            f"Not signed in to wishlist: {exc.reason}. "
+            "Reconnect the wishlist server in your client settings."
+        ) from exc
+    return WishlistAPI(header)
+
+
+def register(mcp: FastMCP) -> None:
+    """Attach every tool to the server."""
+
+    # --- reads ---------------------------------------------------------------
+
+    @mcp.tool(annotations=READ)
+    def wishlist_search_people(query: str, limit: int = SEARCH_LIMIT) -> list[Person]:
+        """Find people by username or display name. Start here when you know
+        someone's name but not their wishlist username. Returns at most 20
+        matches."""
+        if not query.strip():
+            return []
+        data = api().get("/api/v1/search/people", {"q": query})
+        results = (data or {}).get("results", [])
+        capped = max(0, min(limit, SEARCH_LIMIT))
+        return [Person(**r) for r in results[:capped]]
+
+    @mcp.tool(annotations=READ)
+    def wishlist_get_gift_guide(username: str) -> GiftGuide:
+        """Everything you need to choose a gift for one person: their sizes,
+        preferred brands and colours, allergies, things they do not want, and
+        their wishlist.
+
+        Use this first when the task is choosing a gift. It replaces calling
+        wishlist_get_profile and wishlist_get_wishlist separately."""
+        client = api()
+        profile = client.get(f"/api/v1/profiles/{username}")
+        wishlist = client.get(f"/api/v1/wishlists/{username}")
+        return GiftGuide(
+            profile=GiftProfile(**_profile_fields(profile)),
+            items=[_item(i) for i in (wishlist or {}).get("items", [])],
+            in_your_circle=bool(profile.get("in_your_circle")),
+        )
+
+    @mcp.tool(annotations=READ)
+    def wishlist_get_profile(username: str) -> GiftProfile:
+        """One person's profile without their wishlist. Prefer
+        wishlist_get_gift_guide unless you specifically do not want the items."""
+        return GiftProfile(**_profile_fields(api().get(f"/api/v1/profiles/{username}")))
+
+    @mcp.tool(annotations=READ)
+    def wishlist_get_wishlist(username: str) -> list[Item]:
+        """One person's wishlist without their profile. Prefer
+        wishlist_get_gift_guide unless you specifically do not want the profile."""
+        data = api().get(f"/api/v1/wishlists/{username}")
+        return [_item(i) for i in (data or {}).get("items", [])]
+
+    @mcp.tool(annotations=READ)
+    def wishlist_get_my_profile() -> MyProfile:
+        """Your own profile, including fields you have hidden from others and the
+        visibility settings that hide them."""
+        return _my_profile(api().get("/api/v1/profiles/me"))
+
+    @mcp.tool(annotations=READ)
+    def wishlist_get_my_wishlist() -> list[MyItem]:
+        """Your own wishlist, including items marked circle_only. Use this to get
+        item ids before updating or deleting an item."""
+        data = api().get("/api/v1/wishlists/mine")
+        return [_my_item(i) for i in (data or {}).get("items", [])]
+
+    @mcp.tool(annotations=READ)
+    def wishlist_list_circle() -> list[CircleMember]:
+        """People in your circle. They can see the profile fields and wishlist
+        items you have marked circle_only."""
+        data = api().get("/api/v1/circle/members")
+        return [
+            CircleMember(
+                username=m.get("username", ""),
+                display_name=m.get("display_name"),
+                since=(m.get("since") or m.get("created_at") or "")[:10],
+            )
+            for m in (data or {}).get("members", [])
+        ]
+
+    @mcp.tool(annotations=READ)
+    def wishlist_preview_invite(invite_token: str) -> InvitePreview:
+        """See who sent an invite and whether it is still valid, before accepting
+        it. The token is the long code at the end of an invite link."""
+        data = api().get(f"/api/v1/invites/{invite_token}")
+        invite = (data or {}).get("invite", {})
+        return InvitePreview(
+            inviter_username=invite.get("inviter_username", ""),
+            inviter_display_name=invite.get("inviter_display_name"),
+            state=invite.get("state", "expired"),
+        )
+
+    # --- writes --------------------------------------------------------------
+
+    @mcp.tool(annotations=WRITE)
+    def wishlist_add_item(
+        name: str,
+        url: str | None = None,
+        store_notes: str | None = None,
+        priority: Priority | None = None,
+        size: str | None = None,
+        category: str | None = None,
+        image_url: str | None = None,
+        visibility: Visibility = "public",
+    ) -> MyItem:
+        """Add an item to your own wishlist. Only name is required.
+
+        Use store_notes for the details that stop someone buying the wrong
+        variant, such as colour, model, or which shop. Set visibility to
+        circle_only to show the item to your circle and nobody else."""
+        payload = _present(
+            name=name,
+            url=url,
+            store_notes=store_notes,
+            priority=priority,
+            size=size,
+            category=category,
+            image_url=image_url,
+            visibility=visibility,
+        )
+        return _my_item(api().post("/api/v1/wishlists/mine/items", payload))
+
+    @mcp.tool(annotations=WRITE_IDEMPOTENT)
+    def wishlist_update_item(
+        item_id: int,
+        name: str | None = None,
+        url: str | None = None,
+        store_notes: str | None = None,
+        priority: Priority | None = None,
+        size: str | None = None,
+        category: str | None = None,
+        image_url: str | None = None,
+        visibility: Visibility | None = None,
+    ) -> MyItem:
+        """Change one of your own wishlist items. Omitted fields are left as they
+        are. Get item_id from wishlist_get_my_wishlist."""
+        payload = _present(
+            name=name,
+            url=url,
+            store_notes=store_notes,
+            priority=priority,
+            size=size,
+            category=category,
+            image_url=image_url,
+            visibility=visibility,
+        )
+        if not payload:
+            raise ToolError("Nothing to change. Pass at least one field besides item_id.")
+        return _my_item(api().patch(f"/api/v1/wishlists/mine/items/{item_id}", payload))
+
+    @mcp.tool(annotations=DESTRUCTIVE)
+    def wishlist_delete_item(item_id: int) -> DeletedItem:
+        """Remove one of your own wishlist items. This cannot be undone, so confirm
+        with the user which item they mean before calling. Get item_id from
+        wishlist_get_my_wishlist."""
+        api().delete(f"/api/v1/wishlists/mine/items/{item_id}")
+        return DeletedItem(deleted=True, item_id=item_id)
+
+    @mcp.tool(annotations=WRITE_IDEMPOTENT)
+    def wishlist_update_my_profile(
+        display_name: str | None = None,
+        bio: str | None = None,
+        shirt_size: str | None = None,
+        shoe_size: str | None = None,
+        pants_size: str | None = None,
+        preferred_brands: str | None = None,
+        preferred_colors: str | None = None,
+        allergies: str | None = None,
+        things_i_dont_want: str | None = None,
+        address_line1: str | None = None,
+        address_line2: str | None = None,
+        city: str | None = None,
+        state: str | None = None,
+        zip_code: str | None = None,
+        country: str | None = None,
+        visibility: dict[str, Visibility] | None = None,
+    ) -> MyProfile:
+        """Change your own profile. Omitted fields are left as they are.
+
+        visibility takes keys, not field names: {"address": "circle_only"} hides
+        all six address fields at once. Call wishlist_get_my_profile first to see
+        the ten keys it accepts."""
+        payload = _present(
+            display_name=display_name,
+            bio=bio,
+            shirt_size=shirt_size,
+            shoe_size=shoe_size,
+            pants_size=pants_size,
+            preferred_brands=preferred_brands,
+            preferred_colors=preferred_colors,
+            allergies=allergies,
+            things_i_dont_want=things_i_dont_want,
+            address_line1=address_line1,
+            address_line2=address_line2,
+            city=city,
+            state=state,
+            zip_code=zip_code,
+            country=country,
+            visibility=visibility,
+        )
+        if not payload:
+            raise ToolError("Nothing to change. Pass at least one field.")
+        return _my_profile(api().patch("/api/v1/profiles/me", payload))
+
+    @mcp.tool(annotations=DESTRUCTIVE)
+    def wishlist_create_invite(email: str) -> CreatedInvite:
+        """Invite someone to your circle by email.
+
+        This sends a real email immediately and it cannot be unsent. Read the
+        address back to the user and get their confirmation before calling.
+
+        Anyone who accepts joins your circle, which lets them see every profile
+        field and wishlist item you have marked circle_only."""
+        data = api().post("/api/v1/invites", {"email": email})
+        invite = (data or {}).get("invite", {})
+        return CreatedInvite(
+            email=invite.get("recipient_email", email),
+            state="sent",
+            expires_at=(invite.get("expires_at") or "")[:10],
+        )
+
+    @mcp.tool(annotations=WRITE_IDEMPOTENT)
+    def wishlist_accept_invite(invite_token: str) -> AcceptedInvite:
+        """Accept an invite and join that person's circle.
+
+        This is reciprocal: they join your circle too, so accepting lets them see
+        the profile fields and wishlist items you have marked circle_only. Tell the
+        user that before calling. Use wishlist_preview_invite first to check who
+        the invite is from."""
+        data = api().post(f"/api/v1/invites/{invite_token}/accept")
+        invite = (data or {}).get("invite", {})
+        return AcceptedInvite(
+            accepted=True, inviter_username=invite.get("inviter_username", "")
+        )
+
+
+# --- shaping -----------------------------------------------------------------
+
+
+def _present(**kwargs) -> dict:
+    """Only the fields the caller actually set.
+
+    Sending an explicit null would clear a field the user never mentioned, which
+    is how an agent quietly wipes someone's address.
+    """
+    return {k: v for k, v in kwargs.items() if v is not None}
+
+
+def _profile_fields(data: dict | None) -> dict:
+    """The subset of an API profile the tool schemas carry.
+
+    id and user_id are dropped: they are database keys with no meaning to a
+    model, and username already identifies the person.
+    """
+    keep = set(GiftProfile.model_fields)
+    return {k: v for k, v in (data or {}).items() if k in keep}
+
+
+def _my_profile(data: dict | None) -> MyProfile:
+    return MyProfile(
+        **_profile_fields(data), visibility=(data or {}).get("visibility") or {}
+    )
+
+
+def _item(data: dict) -> Item:
+    keep = set(Item.model_fields)
+    return Item(**{k: v for k, v in data.items() if k in keep})
+
+
+def _my_item(data: dict | None) -> MyItem:
+    data = data or {}
+    keep = set(MyItem.model_fields)
+    return MyItem(**{k: v for k, v in data.items() if k in keep})
