@@ -11,7 +11,7 @@ from starlette.responses import JSONResponse
 from starlette.routing import Mount, Route
 
 from wishlist_mcp.config import settings
-from wishlist_mcp.middleware import AuthGate, ForwardedProto, HostGuard
+from wishlist_mcp.middleware import AuthGate, ForwardedProto, HostGuard, WildcardAccept
 from wishlist_mcp.server import build_asgi_app
 
 
@@ -68,5 +68,8 @@ def create_app() -> Starlette:
     )
 
     # Applied inside out: the scheme is fixed first, then the host is checked,
-    # then a token is demanded.
-    return ForwardedProto(HostGuard(AuthGate(app)))
+    # then a token is demanded, and last a wildcard Accept is spelled out. That
+    # last step sits innermost on purpose, so an unauthenticated call still gets
+    # its 401 rather than a 406 about a header it was never going to be asked
+    # about.
+    return ForwardedProto(HostGuard(AuthGate(WildcardAccept(app))))

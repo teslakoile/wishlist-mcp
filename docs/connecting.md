@@ -124,6 +124,11 @@ none. Both are correct. This server speaks stateless JSON and offers no SSE
 stream, so there is nothing to get. A client that treats the `401` on its
 unauthenticated discovery probe as fatal has a bug in the client.
 
+An `Accept` header of `*/*`, or none at all, works. It used to come back as
+`406 Client must accept application/json`, which was wrong: both already accept
+JSON. Sending exactly `text/event-stream` is still refused, because this server
+answers in JSON and that client cannot read it.
+
 A CLI that says it logged in successfully has not proved anything. Make a real
 tool call before you believe it.
 

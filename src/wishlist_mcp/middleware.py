@@ -111,6 +111,49 @@ class AuthGate:
         await self.app(scope, receive, send)
 
 
+class WildcardAccept:
+    """Spell out an Accept header that already admits JSON, so FastMCP sees it.
+
+    FastMCP matches Accept by substring, so it answers `406 Client must accept
+    application/json` to a client that sends `*/*` and therefore already does.
+    An absent header means the same thing under RFC 9110 and fails the same way.
+    Plain `curl` sends `*/*`, so the first thing anyone tries against this
+    server is the thing that looks broken.
+
+    Only widened ranges are rewritten. A client that asks for exactly
+    `text/event-stream` really cannot read our JSON, and its 406 is correct.
+    """
+
+    WANTED = b"application/json, text/event-stream"
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or not _is_tool_mount(scope["path"]):
+            await self.app(scope, receive, send)
+            return
+
+        if _admits_json_only_by_wildcard(header(scope, b"accept")):
+            headers = [(k, v) for k, v in scope["headers"] if k != b"accept"]
+            headers.append((b"accept", self.WANTED))
+            scope = {**scope, "headers": headers}
+        await self.app(scope, receive, send)
+
+
+def _admits_json_only_by_wildcard(accept: str | None) -> bool:
+    """True when the header accepts JSON but never names it.
+
+    Absent or empty counts: RFC 9110 reads that as accepting anything.
+    """
+    if not accept or not accept.strip():
+        return True
+    ranges = {part.split(";")[0].strip().lower() for part in accept.split(",")}
+    if "application/json" in ranges:
+        return False
+    return bool(ranges & {"*/*", "application/*"})
+
+
 def _is_tool_mount(path: str) -> bool:
     mcp_path = settings.mcp_path()
     return path == mcp_path or path.startswith(f"{mcp_path}/")

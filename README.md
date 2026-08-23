@@ -130,6 +130,10 @@ Each of these is a bug that reached production once.
   while unit tests still pass.
 - **`TestClient` follows redirects by default.** Pass `follow_redirects=False` when the
   point is that a path answers directly.
+- **FastMCP matches `Accept` by substring.** It answers `406 Client must accept
+  application/json` to a client sending `*/*`, which already does, and to one sending no
+  header at all, which under RFC 9110 also does. `WildcardAccept` spells those out before
+  FastMCP sees them. Plain `curl` sends `*/*`, so this was the first thing anyone hit.
 
 ## Deployment
 
