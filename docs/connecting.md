@@ -20,10 +20,15 @@ a successful handshake. A handshake proves discovery and nothing else.
 
 | Client | Registration | Verified | Version tested |
 |---|---|---|---|
-| ChatGPT (web) | DCR | 2026-08-23 | Developer mode, 5.6 Sol |
+| Claude (claude.ai) | CIMD | 2026-08-23 | Opus 5, web |
 | Claude Code | CIMD | 2026-08-23 | 2.0.x |
+| ChatGPT (web) | DCR | 2026-08-23 | Developer mode, 5.6 Sol |
 | Codex CLI | DCR | 2026-08-23 | 0.149.0 |
-| Claude (claude.ai, desktop) | CIMD | not tested | — |
+
+Claude Code and claude.ai are separate surfaces. Connecting one does not
+connect the other. Claude Code keeps its servers in a file on your machine,
+while a claude.ai connector lives in your Anthropic account and reaches the web
+app, the desktop app, and mobile. Set up both if you want both.
 
 ## ChatGPT, in the browser
 
@@ -105,9 +110,19 @@ request with `invalid_query_params`.
 
 ## Claude, on claude.ai or the desktop app
 
-Open **Settings**, then **Connectors**, then **Add custom connector**, and paste
-the address. This path is untested. It uses the same CIMD registration that
-Claude Code uses, so it is expected to work.
+1. Open **Settings**, then **Customize**, then **Connectors**. Connectors moved
+   out of the Settings section, and the old page now just points here.
+2. Choose **Add**, then **Add custom connector**.
+3. Enter `Wishlist` as the name and `https://mcp.wishlist.fit/mcp` as the remote
+   MCP server URL, then choose **Continue**.
+4. Leave both detected defaults alone. Claude reads them from this server's
+   metadata and marks them **Detected**: authentication **Always required**, and
+   OAuth client **Use Anthropic's hosted client metadata**, which is CIMD.
+5. Choose **Add**, then **Connect**, then approve access.
+
+The connector page then splits the tools into 8 read-only and 6 write/delete,
+taken from the annotations each tool carries. Both groups start at **Needs
+approval**, so Claude asks before every call until you change that.
 
 ## When it does not connect
 
