@@ -1,4 +1,4 @@
-"""The fourteen tools, driven through a real MCP client with the wishlist API stubbed.
+"""The nineteen tools, driven through a real MCP client with the wishlist API stubbed.
 
 What these check is this server's own job: shaping requests, shaping responses,
 and turning API errors into sentences a model can act on. The visibility and
@@ -6,6 +6,9 @@ rate-limit rules belong to the wishlist API and are tested there; here we only
 prove we ask it the right question and repeat its answer faithfully.
 """
 
+import json
+import pathlib
+import re
 from unittest.mock import patch
 
 import httpx
@@ -65,6 +68,7 @@ async def test_every_tool_in_the_contract_is_present():
         "wishlist_get_my_profile",
         "wishlist_get_my_wishlist",
         "wishlist_list_circle",
+        "wishlist_list_circle_requests",
         "wishlist_preview_invite",
         "wishlist_add_item",
         "wishlist_update_item",
@@ -72,17 +76,25 @@ async def test_every_tool_in_the_contract_is_present():
         "wishlist_update_my_profile",
         "wishlist_create_invite",
         "wishlist_accept_invite",
+        "wishlist_request_circle",
+        "wishlist_accept_circle_request",
+        "wishlist_decline_circle_request",
+        "wishlist_remove_circle_member",
     }
 
 
-async def test_the_two_irreversible_tools_are_marked_destructive():
+async def test_the_irreversible_tools_are_marked_destructive():
     """ChatGPT confirms destructive actions by default and Claude does in most
     surfaces, so this annotation is the cheapest guardrail on the write set."""
     async with Client(build_server()) as client:
         tools = {t.name: t for t in await client.list_tools()}
 
-    assert tools["wishlist_create_invite"].annotations.destructiveHint is True
-    assert tools["wishlist_delete_item"].annotations.destructiveHint is True
+    for name in (
+        "wishlist_create_invite",
+        "wishlist_delete_item",
+        "wishlist_remove_circle_member",
+    ):
+        assert tools[name].annotations.destructiveHint is True, name
     assert tools["wishlist_add_item"].annotations.destructiveHint is False
 
 
@@ -324,3 +336,453 @@ async def test_an_unreachable_api_says_try_again_rather_than_leaking_the_error(c
 
     assert "Try again in a moment" in str(excinfo.value)
     assert "ConnectError" not in str(excinfo.value)
+
+
+# --- parity with the wishlist API --------------------------------------------
+#
+# Everything below covers ground the API gained after this server split off, plus
+# the three places where the old shaping reported something that was not true.
+
+
+@respx.mock
+async def test_the_gift_guide_carries_the_fields_a_gift_actually_turns_on(call):
+    """Sizes alone do not choose a gift. dietary, interests, price comfort, and
+    already_own each rule something in or out, and a field this server drops is a
+    field the model never learns."""
+    respx.get(f"{API}/api/v1/profiles/sarah").mock(
+        return_value=ok(
+            {
+                "username": "sarah",
+                "pronouns": "she/her",
+                "birthday": {"month": 4, "day": 17},
+                "ring_size": "6",
+                "gift_format_preference": "experiences",
+                "price_comfort": "under_50",
+                "interests": [{"category": "collects", "value": "vinyl"}],
+                "dietary": ["vegan", "no_alcohol"],
+                "already_own": "a record player",
+                "delivery_notes": "leave with the neighbour",
+                "profile_reviewed_at": "2026-08-20T10:00:00Z",
+                "hidden_from_you": [],
+                "in_your_circle": True,
+            }
+        )
+    )
+    respx.get(f"{API}/api/v1/wishlists/sarah").mock(return_value=ok({"items": []}))
+
+    profile = (await call("wishlist_get_gift_guide", {"username": "sarah"}))["profile"]
+
+    assert profile["dietary"] == ["vegan", "no_alcohol"]
+    assert profile["interests"] == [{"category": "collects", "value": "vinyl"}]
+    assert profile["birthday"] == {"month": 4, "day": 17}
+    assert profile["price_comfort"] == "under_50"
+    assert profile["gift_format_preference"] == "experiences"
+    assert profile["already_own"] == "a record player"
+    assert profile["ring_size"] == "6"
+    assert profile["pronouns"] == "she/her"
+    assert profile["delivery_notes"] == "leave with the neighbour"
+    assert profile["profile_reviewed_at"] == "2026-08-20T10:00:00Z"
+
+
+@respx.mock
+async def test_nobody_but_the_owner_is_handed_a_birth_year(call):
+    """The API nulls birth_date for everyone else, and GiftProfile has no field
+    for it either. Two layers, because a year is not recoverable once stated."""
+    respx.get(f"{API}/api/v1/profiles/sarah").mock(
+        return_value=ok(
+            {
+                "username": "sarah",
+                "birth_date": None,
+                "birthday": {"month": 4, "day": 17},
+                "hidden_from_you": [],
+                "in_your_circle": True,
+            }
+        )
+    )
+
+    profile = await call("wishlist_get_profile", {"username": "sarah"})
+
+    assert "birth_date" not in profile
+    assert profile["birthday"] == {"month": 4, "day": 17}
+
+
+@respx.mock
+async def test_my_own_profile_keeps_the_year_and_all_seventeen_keys(call):
+    respx.get(f"{API}/api/v1/profiles/me").mock(
+        return_value=ok(
+            {
+                "username": "me",
+                "birth_date": "1990-04-17",
+                "birthday": {"month": 4, "day": 17},
+                "dietary": [],
+                "interests": [],
+                "visibility": {"address": "circle_only", "dietary": "public"},
+            }
+        )
+    )
+
+    profile = await call("wishlist_get_my_profile")
+
+    assert profile["birth_date"] == "1990-04-17"
+    assert profile["visibility"]["address"] == "circle_only"
+    assert profile["dietary"] == [], "an empty list is an answer, not an absence"
+
+
+@respx.mock
+async def test_search_says_what_you_are_to_each_result(call):
+    """Without relationship every row offers the same button, and the agent finds
+    out only afterwards that it already had a request pending."""
+    respx.get(f"{API}/api/v1/search/people").mock(
+        return_value=ok(
+            {
+                "results": [
+                    {
+                        "username": "sarah",
+                        "display_name": "Sarah",
+                        "avatar_url": "https://img.example/a.png",
+                        "relationship": "request_sent",
+                    }
+                ]
+            }
+        )
+    )
+
+    person = (await call("wishlist_search_people", {"query": "sar"}))[0]
+
+    assert person["relationship"] == "request_sent"
+    assert person["avatar_url"] == "https://img.example/a.png"
+
+
+@respx.mock
+async def test_a_result_the_api_says_nothing_about_is_not_claimed_as_a_stranger(call):
+    """An older API build omits the key. Defaulting to "none" is the safe read
+    only because it is also the one that offers to ask rather than to accept."""
+    respx.get(f"{API}/api/v1/search/people").mock(
+        return_value=ok({"results": [{"username": "sarah", "display_name": None}]})
+    )
+
+    assert (await call("wishlist_search_people", {"query": "sar"}))[0][
+        "relationship"
+    ] == "none"
+
+
+# --- POST /invites answers two different things ------------------------------
+
+
+@respx.mock
+async def test_inviting_a_stranger_still_reports_an_email(call):
+    respx.post(f"{API}/api/v1/invites").mock(
+        return_value=ok(
+            {
+                "invite": {
+                    "recipient_email": "new@example.com",
+                    "expires_at": "2026-09-01T00:00:00Z",
+                }
+            }
+        )
+    )
+
+    outcome = await call("wishlist_create_invite", {"email": "new@example.com"})
+
+    assert outcome["outcome"] == "invite_emailed"
+    assert outcome["email"] == "new@example.com"
+    assert outcome["expires_at"] == "2026-09-01"
+
+
+@respx.mock
+async def test_inviting_an_address_that_has_an_account_does_not_claim_an_email(call):
+    """The bug this replaced. POST /invites answers `request` when the address
+    already belongs to someone, and reading only `invite` reported a sent email
+    with a blank expiry for a message that was never sent."""
+    respx.post(f"{API}/api/v1/invites").mock(
+        return_value=ok(
+            {
+                "request": {
+                    "id": 7,
+                    "direction": "outgoing",
+                    "status": "pending",
+                    "username": "sarah",
+                    "display_name": "Sarah",
+                    "created_at": "2026-08-25T10:00:00Z",
+                }
+            }
+        )
+    )
+
+    outcome = await call("wishlist_create_invite", {"email": "sarah@example.com"})
+
+    assert outcome["outcome"] == "request_sent"
+    assert outcome["username"] == "sarah"
+    assert outcome["request_id"] == 7
+    assert outcome["email"] is None, "no address was emailed"
+    assert outcome["expires_at"] is None
+
+
+@respx.mock
+async def test_inviting_someone_who_already_asked_you_reports_the_join(call):
+    respx.post(f"{API}/api/v1/invites").mock(
+        return_value=ok(
+            {
+                "request": {
+                    "id": 7,
+                    "direction": "incoming",
+                    "status": "accepted",
+                    "username": "sarah",
+                    "display_name": "Sarah",
+                    "created_at": "2026-08-25T10:00:00Z",
+                }
+            }
+        )
+    )
+
+    outcome = await call("wishlist_create_invite", {"email": "sarah@example.com"})
+
+    assert outcome["outcome"] == "circle_joined"
+    assert outcome["username"] == "sarah"
+
+
+# --- circle requests ---------------------------------------------------------
+
+
+@respx.mock
+async def test_pending_requests_come_back_in_both_directions(call):
+    respx.get(f"{API}/api/v1/circle/requests").mock(
+        return_value=ok(
+            {
+                "incoming": [
+                    {
+                        "id": 1,
+                        "direction": "incoming",
+                        "status": "pending",
+                        "user_id": 9,
+                        "username": "sarah",
+                        "display_name": "Sarah",
+                        "created_at": "2026-08-25T10:00:00Z",
+                    }
+                ],
+                "outgoing": [
+                    {
+                        "id": 2,
+                        "direction": "outgoing",
+                        "status": "pending",
+                        "user_id": 10,
+                        "username": "tom",
+                        "display_name": None,
+                        "created_at": "2026-08-24T10:00:00Z",
+                    }
+                ],
+            }
+        )
+    )
+
+    requests = await call("wishlist_list_circle_requests")
+
+    assert [r["username"] for r in requests["incoming"]] == ["sarah"]
+    assert [r["id"] for r in requests["outgoing"]] == [2]
+    assert "user_id" not in requests["incoming"][0], "database keys mean nothing here"
+
+
+@respx.mock
+async def test_asking_someone_reports_a_pending_request(call):
+    respx.post(f"{API}/api/v1/circle/requests").mock(
+        return_value=ok(
+            {
+                "request": {
+                    "id": 4,
+                    "direction": "outgoing",
+                    "status": "pending",
+                    "username": "sarah",
+                    "display_name": "Sarah",
+                    "created_at": "2026-08-25T10:00:00Z",
+                }
+            }
+        )
+    )
+
+    outcome = await call("wishlist_request_circle", {"username": "sarah"})
+
+    assert outcome == {"outcome": "request_sent", "username": "sarah", "request_id": 4}
+
+
+@respx.mock
+async def test_asking_back_settles_it_and_says_so(call):
+    """The API answers 200 with an accepted request when they had already asked.
+    The client does not carry status codes up, so this reads the request's own
+    status. Reporting "request_sent" here would hide that circle_only fields are
+    already shared."""
+    respx.post(f"{API}/api/v1/circle/requests").mock(
+        return_value=ok(
+            {
+                "request": {
+                    "id": 4,
+                    "direction": "incoming",
+                    "status": "accepted",
+                    "username": "sarah",
+                    "display_name": "Sarah",
+                    "created_at": "2026-08-25T10:00:00Z",
+                }
+            }
+        )
+    )
+
+    outcome = await call("wishlist_request_circle", {"username": "sarah"})
+
+    assert outcome["outcome"] == "circle_joined"
+    assert outcome["request_id"] is None
+
+
+@respx.mock
+async def test_accepting_and_declining_hit_their_own_endpoints(call):
+    accept = respx.post(f"{API}/api/v1/circle/requests/3/accept").mock(
+        return_value=ok({"request": {"username": "sarah", "status": "accepted"}})
+    )
+    decline = respx.post(f"{API}/api/v1/circle/requests/5/decline").mock(
+        return_value=ok({"request": {"username": "tom", "status": "declined"}})
+    )
+
+    accepted = await call("wishlist_accept_circle_request", {"request_id": 3})
+    declined = await call("wishlist_decline_circle_request", {"request_id": 5})
+
+    assert accepted == {"outcome": "accepted", "username": "sarah"}
+    assert declined == {"outcome": "declined", "username": "tom"}
+    assert accept.called and decline.called
+
+
+@respx.mock
+async def test_a_refusal_from_the_api_reaches_the_model_as_a_sentence(call):
+    respx.post(f"{API}/api/v1/circle/requests").mock(
+        return_value=err(409, "request_already_pending", "You already asked Sarah.")
+    )
+
+    with pytest.raises(ToolError) as excinfo:
+        await call("wishlist_request_circle", {"username": "sarah"})
+
+    assert "already asked Sarah" in str(excinfo.value)
+
+
+# --- removing a circle member ------------------------------------------------
+
+
+@respx.mock
+async def test_removing_a_member_resolves_the_username_first(call):
+    """Every other tool addresses people by username. Taking a raw database id
+    for the one destructive call is how the wrong person gets removed."""
+    respx.get(f"{API}/api/v1/circle/members").mock(
+        return_value=ok(
+            {
+                "members": [
+                    {"user_id": 9, "username": "sarah", "display_name": "Sarah"},
+                    {"user_id": 10, "username": "tom", "display_name": None},
+                ]
+            }
+        )
+    )
+    delete = respx.delete(f"{API}/api/v1/circle/members/10").mock(return_value=ok(None))
+
+    outcome = await call("wishlist_remove_circle_member", {"username": "tom"})
+
+    assert outcome == {"removed": True, "username": "tom"}
+    assert delete.called
+
+
+@respx.mock
+async def test_removing_someone_who_is_not_in_the_circle_deletes_nothing(call):
+    respx.get(f"{API}/api/v1/circle/members").mock(
+        return_value=ok({"members": [{"user_id": 9, "username": "sarah"}]})
+    )
+    delete = respx.delete(url__regex=rf"{API}/api/v1/circle/members/\d+").mock(
+        return_value=ok(None)
+    )
+
+    with pytest.raises(ToolError) as excinfo:
+        await call("wishlist_remove_circle_member", {"username": "tom"})
+
+    assert "not in your circle" in str(excinfo.value)
+    assert not delete.called
+
+
+@respx.mock
+async def test_the_circle_list_does_not_invent_a_join_date(call):
+    """The members endpoint records none. An empty string dressed up as a date is
+    worse than its absence, and the old shape shipped one on every row."""
+    respx.get(f"{API}/api/v1/circle/members").mock(
+        return_value=ok(
+            {"members": [{"user_id": 9, "username": "sarah", "display_name": "Sarah"}]}
+        )
+    )
+
+    member = (await call("wishlist_list_circle"))[0]
+
+    assert member == {"username": "sarah", "display_name": "Sarah"}
+
+
+# --- profile writes ----------------------------------------------------------
+
+
+@respx.mock
+async def test_the_new_profile_fields_reach_the_api(call):
+    route = respx.patch(f"{API}/api/v1/profiles/me").mock(
+        return_value=ok({"username": "me", "visibility": {}})
+    )
+
+    await call(
+        "wishlist_update_my_profile",
+        {
+            "birth_date": "1990-04-17",
+            "ring_size": "6",
+            "price_comfort": "under_50",
+            "gift_format_preference": "experiences",
+            "interests": [{"category": "collects", "value": "vinyl"}],
+            "dietary": ["vegan"],
+            "delivery_notes": "leave with the neighbour",
+            "already_own": "a record player",
+        },
+    )
+
+    sent = json.loads(route.calls.last.request.content)
+    assert sent["birth_date"] == "1990-04-17"
+    assert sent["interests"] == [{"category": "collects", "value": "vinyl"}]
+    assert sent["dietary"] == ["vegan"]
+    assert sent["already_own"] == "a record player"
+    assert sent["ring_size"] == "6"
+
+
+@respx.mock
+async def test_an_empty_dietary_list_is_sent_rather_than_dropped(call):
+    """None means unanswered and [] means nothing applies. Dropping the empty
+    list would leave a stale rule in place with no way to clear it."""
+    route = respx.patch(f"{API}/api/v1/profiles/me").mock(
+        return_value=ok({"username": "me", "visibility": {}})
+    )
+
+    await call("wishlist_update_my_profile", {"dietary": []})
+
+    assert json.loads(route.calls.last.request.content) == {"dietary": []}
+
+
+@respx.mock
+async def test_fields_the_caller_left_alone_are_never_sent(call):
+    """An explicit null would clear a field the user never mentioned."""
+    route = respx.patch(f"{API}/api/v1/profiles/me").mock(
+        return_value=ok({"username": "me", "visibility": {}})
+    )
+
+    await call("wishlist_update_my_profile", {"shirt_size": "L"})
+
+    assert json.loads(route.calls.last.request.content) == {"shirt_size": "L"}
+
+
+# --- the README is part of the interface --------------------------------------
+
+
+async def test_the_readme_lists_exactly_the_tools_that_exist():
+    """The table is what a reader trusts before connecting anything. A tool added
+    without a row, or a row left behind after a rename, is the same class of drift
+    this server keeps having with the API."""
+    readme = (pathlib.Path(__file__).resolve().parents[1] / "README.md").read_text()
+    documented = set(re.findall(r"^\| `(wishlist_\w+)`", readme, re.MULTILINE))
+
+    async with Client(build_server()) as client:
+        registered = {t.name for t in await client.list_tools()}
+
+    assert documented == registered

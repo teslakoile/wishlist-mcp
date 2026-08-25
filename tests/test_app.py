@@ -97,7 +97,7 @@ def test_the_canonical_path_does_not_redirect(client, bearer):
     assert response.json()["result"]["serverInfo"]["name"] == "wishlist"
 
 
-def test_a_handshake_lists_all_fourteen_tools(client, bearer):
+def test_a_handshake_lists_every_tool(client, bearer):
     """Exercises the mount and the chained lifespan together. FastMCP's session
     manager runs in its own lifespan, and mounting an ASGI app does not start
     it, so without the chaining every call fails with "Task group is not
@@ -121,7 +121,7 @@ def test_a_handshake_lists_all_fourteen_tools(client, bearer):
     )
 
     assert response.status_code == 200, response.text
-    assert len(response.json()["result"]["tools"]) == 14
+    assert len(response.json()["result"]["tools"]) == 19
 
 
 @respx.mock
