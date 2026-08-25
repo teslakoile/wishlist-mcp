@@ -43,7 +43,7 @@ consent screen; it only verifies what AuthKit signed.
 
 ## The tools
 
-Fourteen, one per thing you can already do by hand in the web app. Parity is the rule:
+Nineteen, one per thing you can already do by hand in the web app. Parity is the rule:
 no agent-only privileges, and nothing the app itself cannot do.
 
 | Tool | Kind |
@@ -55,22 +55,39 @@ no agent-only privileges, and nothing the app itself cannot do.
 | `wishlist_get_my_profile` | read |
 | `wishlist_get_my_wishlist` | read |
 | `wishlist_list_circle` | read |
+| `wishlist_list_circle_requests` | read |
 | `wishlist_preview_invite` | read |
 | `wishlist_add_item` | write |
 | `wishlist_update_item` | write |
 | `wishlist_update_my_profile` | write |
+| `wishlist_request_circle` | write |
+| `wishlist_accept_circle_request` | write |
+| `wishlist_decline_circle_request` | write |
 | `wishlist_accept_invite` | write |
 | `wishlist_create_invite` | **destructive** |
 | `wishlist_delete_item` | **destructive** |
+| `wishlist_remove_circle_member` | **destructive** |
 
 `wishlist_get_gift_guide` returns a person's profile and wishlist together. It is the
 reason anyone connects this server, and without it the gift-giver journey costs three
-round trips.
+round trips. It carries the fields that actually rule a gift in or out: dietary rules
+and allergies, interests, price comfort, what they already own, and their birthday
+without the year.
 
-The two destructive tools carry `destructiveHint: true`, so clients that confirm
+The three destructive tools carry `destructiveHint: true`, so clients that confirm
 irreversible actions will ask first. Sending an invite emails a real person and cannot be
-unsent. Accepting one is reciprocal: the inviter gains access to your circle-only fields
-as well as you gaining access to theirs.
+unsent. Accepting a request or an invite is reciprocal: the other person gains access to
+your circle-only fields as well as you gaining access to theirs. Removing a member cuts
+both ways at once, and getting back in needs a fresh request they have to accept.
+
+### Two ways into a circle
+
+`wishlist_create_invite` takes an email address and `wishlist_request_circle` takes a
+username, but the API decides which path an address takes, not the caller. An address
+with no account behind it gets a tokenized email; one that already belongs to someone
+gets an in-app request and no email at all. `wishlist_create_invite` reports which
+happened in its `outcome` field, and a caller that assumes an email went out will tell
+the user something untrue.
 
 ### One connection, everything
 
@@ -94,6 +111,23 @@ uv run ruff format --check . && uv run ruff check .
 Tests stub the wishlist API with `respx`. What they check is this server's own job:
 verifying tokens, shaping requests, and turning API errors into sentences a model can act
 on. The rules themselves belong to the API and are tested there.
+
+## Keeping parity
+
+The wishlist API ships from another repo on another deploy, so an endpoint or a field can
+change there, reach the website, and leave this surface where it was. Nothing here
+detects that.
+
+`GiftProfile` and `MyProfile` in `schemas.py` list readable fields explicitly, and
+`wishlist_update_my_profile` lists writable ones as arguments, so a new column stops at
+this boundary until someone moves it. The `Dietary`, `GiftFormat`, `PriceComfort`, and
+`InterestCategory` literals are copies of the API's enums for the same reason.
+
+Watch for a second failure mode that does not look like a gap: a tool reads one key out
+of a response body, and an endpoint that starts answering with a second shape makes it
+report the wrong thing confidently rather than fail. `POST /invites` did exactly that.
+
+The workspace repo tracks the ledger in `docs/mcp-parity.md`.
 
 ## Configuration
 

@@ -1,9 +1,14 @@
-"""The fourteen wishlist tools.
+"""The nineteen wishlist tools.
 
 Parity is the rule: this exposes what the authenticated user can already do by
 hand in the web app, with no agent-only privileges and nothing the app cannot do
 either. Every tool maps onto an endpoint the website itself calls, so an agent
 and a browser cannot reach different answers.
+
+Parity does not hold on its own. The wishlist API ships from another repo on
+another deploy, so an endpoint or a field can change there and reach the website
+while this surface stays where it was. The ledger in the workspace repo,
+docs/mcp-parity.md, is where that is tracked.
 
 Docstrings here are the interface. They are what the calling model reads to
 choose a tool, and they are the only guardrail on the write tools that
@@ -19,16 +24,25 @@ from wishlist_mcp.client import WishlistAPI
 from wishlist_mcp.schemas import (
     AcceptedInvite,
     CircleMember,
-    CreatedInvite,
+    CircleRequest,
     DeletedItem,
+    Dietary,
+    GiftFormat,
     GiftGuide,
     GiftProfile,
+    Interest,
+    InviteOutcome,
     InvitePreview,
     Item,
     MyItem,
     MyProfile,
+    PendingRequests,
     Person,
+    PriceComfort,
     Priority,
+    RemovedMember,
+    RequestOutcome,
+    SettledRequest,
     Visibility,
 )
 
@@ -69,36 +83,45 @@ def register(mcp: FastMCP) -> None:
     def wishlist_search_people(query: str, limit: int = SEARCH_LIMIT) -> list[Person]:
         """Find people by username or display name. Start here when you know
         someone's name but not their wishlist username. Returns at most 20
-        matches."""
+        matches.
+
+        Each match carries relationship, which says whether you are already in
+        this person's circle, have a request outstanding either way, or can ask."""
         if not query.strip():
             return []
         data = api().get("/api/v1/search/people", {"q": query})
         results = (data or {}).get("results", [])
         capped = max(0, min(limit, SEARCH_LIMIT))
-        return [Person(**r) for r in results[:capped]]
+        return [_person(r) for r in results[:capped]]
 
     @mcp.tool(annotations=READ)
     def wishlist_get_gift_guide(username: str) -> GiftGuide:
         """Everything you need to choose a gift for one person: their sizes,
-        preferred brands and colours, allergies, things they do not want, and
-        their wishlist.
+        birthday, interests, preferred brands and colours, price comfort,
+        allergies, dietary rules, what they already own, things they do not want,
+        and their wishlist.
 
         Use this first when the task is choosing a gift. It replaces calling
-        wishlist_get_profile and wishlist_get_wishlist separately."""
+        wishlist_get_profile and wishlist_get_wishlist separately.
+
+        Read allergies and dietary before suggesting anything consumable. They
+        answer different questions: allergies is harm, dietary is a rule kept by
+        choice, and neither implies the other."""
         client = api()
         profile = client.get(f"/api/v1/profiles/{username}")
         wishlist = client.get(f"/api/v1/wishlists/{username}")
         return GiftGuide(
-            profile=GiftProfile(**_profile_fields(profile)),
+            profile=GiftProfile(**_profile_fields(profile, GiftProfile)),
             items=[_item(i) for i in (wishlist or {}).get("items", [])],
-            in_your_circle=bool(profile.get("in_your_circle")),
+            in_your_circle=bool((profile or {}).get("in_your_circle")),
         )
 
     @mcp.tool(annotations=READ)
     def wishlist_get_profile(username: str) -> GiftProfile:
         """One person's profile without their wishlist. Prefer
         wishlist_get_gift_guide unless you specifically do not want the items."""
-        return GiftProfile(**_profile_fields(api().get(f"/api/v1/profiles/{username}")))
+        data = api().get(f"/api/v1/profiles/{username}")
+        return GiftProfile(**_profile_fields(data, GiftProfile))
 
     @mcp.tool(annotations=READ)
     def wishlist_get_wishlist(username: str) -> list[Item]:
@@ -109,8 +132,9 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool(annotations=READ)
     def wishlist_get_my_profile() -> MyProfile:
-        """Your own profile, including fields you have hidden from others and the
-        visibility settings that hide them."""
+        """Your own profile, including fields you have hidden from others, your
+        birth year, and the visibility settings that hide them. Call this before
+        wishlist_update_my_profile to see the seventeen visibility keys."""
         return _my_profile(api().get("/api/v1/profiles/me"))
 
     @mcp.tool(annotations=READ)
@@ -127,12 +151,24 @@ def register(mcp: FastMCP) -> None:
         data = api().get("/api/v1/circle/members")
         return [
             CircleMember(
-                username=m.get("username", ""),
-                display_name=m.get("display_name"),
-                since=(m.get("since") or m.get("created_at") or "")[:10],
+                username=m.get("username", ""), display_name=m.get("display_name")
             )
             for m in (data or {}).get("members", [])
         ]
+
+    @mcp.tool(annotations=READ)
+    def wishlist_list_circle_requests() -> PendingRequests:
+        """Requests to join a circle that nobody has answered yet, in both
+        directions.
+
+        incoming is yours to answer with wishlist_accept_circle_request or
+        wishlist_decline_circle_request. outgoing is what you are waiting on. Both
+        carry the request id those tools need."""
+        data = api().get("/api/v1/circle/requests")
+        return PendingRequests(
+            incoming=[_request(r) for r in (data or {}).get("incoming", [])],
+            outgoing=[_request(r) for r in (data or {}).get("outgoing", [])],
+        )
 
     @mcp.tool(annotations=READ)
     def wishlist_preview_invite(invite_token: str) -> InvitePreview:
@@ -216,64 +252,141 @@ def register(mcp: FastMCP) -> None:
     def wishlist_update_my_profile(
         display_name: str | None = None,
         bio: str | None = None,
+        pronouns: str | None = None,
+        avatar_url: str | None = None,
+        birth_date: str | None = None,
         shirt_size: str | None = None,
         shoe_size: str | None = None,
         pants_size: str | None = None,
+        ring_size: str | None = None,
         preferred_brands: str | None = None,
         preferred_colors: str | None = None,
+        gift_format_preference: GiftFormat | None = None,
+        price_comfort: PriceComfort | None = None,
+        interests: list[Interest] | None = None,
         allergies: str | None = None,
-        things_i_dont_want: str | None = None,
+        dietary: list[Dietary] | None = None,
         address_line1: str | None = None,
         address_line2: str | None = None,
         city: str | None = None,
         state: str | None = None,
         zip_code: str | None = None,
         country: str | None = None,
+        delivery_notes: str | None = None,
+        things_i_dont_want: str | None = None,
+        already_own: str | None = None,
         visibility: dict[str, Visibility] | None = None,
     ) -> MyProfile:
         """Change your own profile. Omitted fields are left as they are.
 
+        birth_date is an ISO-8601 date, "1990-04-17". Nobody but you is ever shown
+        the year.
+
+        interests and dietary replace the whole list rather than adding to it, so
+        read the current one with wishlist_get_my_profile first and send it back
+        with your change folded in. At most 20 interests.
+
         visibility takes keys, not field names: {"address": "circle_only"} hides
-        all six address fields at once. Call wishlist_get_my_profile first to see
-        the ten keys it accepts."""
+        all six address fields and delivery_notes at once. Call
+        wishlist_get_my_profile to see the seventeen keys it accepts."""
         payload = _present(
             display_name=display_name,
             bio=bio,
+            pronouns=pronouns,
+            avatar_url=avatar_url,
+            birth_date=birth_date,
             shirt_size=shirt_size,
             shoe_size=shoe_size,
             pants_size=pants_size,
+            ring_size=ring_size,
             preferred_brands=preferred_brands,
             preferred_colors=preferred_colors,
+            gift_format_preference=gift_format_preference,
+            price_comfort=price_comfort,
+            interests=_tags(interests),
             allergies=allergies,
-            things_i_dont_want=things_i_dont_want,
+            dietary=dietary,
             address_line1=address_line1,
             address_line2=address_line2,
             city=city,
             state=state,
             zip_code=zip_code,
             country=country,
+            delivery_notes=delivery_notes,
+            things_i_dont_want=things_i_dont_want,
+            already_own=already_own,
             visibility=visibility,
         )
         if not payload:
             raise ToolError("Nothing to change. Pass at least one field.")
         return _my_profile(api().patch("/api/v1/profiles/me", payload))
 
-    @mcp.tool(annotations=DESTRUCTIVE)
-    def wishlist_create_invite(email: str) -> CreatedInvite:
-        """Invite someone to your circle by email.
+    @mcp.tool(annotations=WRITE)
+    def wishlist_request_circle(username: str) -> RequestOutcome:
+        """Ask someone who already has a wishlist account into your circle.
 
-        This sends a real email immediately and it cannot be unsent. Read the
-        address back to the user and get their confirmation before calling.
+        They approve it in the app; no email link is sent. Nothing of yours is
+        shared until they accept, and accepting is reciprocal, so tell the user
+        that joining means this person will see the profile fields and wishlist
+        items marked circle_only.
+
+        If they had already asked you, this answers them instead and you both
+        join at once. The outcome field says which happened.
+
+        For an address that has no wishlist account behind it, use
+        wishlist_create_invite."""
+        data = api().post("/api/v1/circle/requests", {"username": username})
+        return _request_outcome(data, fallback_username=username)
+
+    @mcp.tool(annotations=WRITE_IDEMPOTENT)
+    def wishlist_accept_circle_request(request_id: int) -> SettledRequest:
+        """Accept a request and join that person's circle.
+
+        This is reciprocal: they see the profile fields and wishlist items you
+        have marked circle_only, as well as you seeing theirs. Tell the user that
+        before calling, and name the person. Get request_id from
+        wishlist_list_circle_requests."""
+        data = api().post(f"/api/v1/circle/requests/{request_id}/accept")
+        request = (data or {}).get("request", {})
+        return SettledRequest(outcome="accepted", username=request.get("username", ""))
+
+    @mcp.tool(annotations=WRITE_IDEMPOTENT)
+    def wishlist_decline_circle_request(request_id: int) -> SettledRequest:
+        """Decline a request. Nothing of yours is shared, and they cannot ask
+        again for seven days. Get request_id from wishlist_list_circle_requests."""
+        data = api().post(f"/api/v1/circle/requests/{request_id}/decline")
+        request = (data or {}).get("request", {})
+        return SettledRequest(outcome="declined", username=request.get("username", ""))
+
+    @mcp.tool(annotations=DESTRUCTIVE)
+    def wishlist_remove_circle_member(username: str) -> RemovedMember:
+        """Remove someone from your circle.
+
+        Membership is mutual, so this cuts both ways at once: they stop seeing
+        what you marked circle_only, and you stop seeing what they marked
+        circle_only. Getting back in means a fresh request that the other person
+        has to accept. Confirm the name with the user before calling."""
+        client, user_id = _resolve_member(username)
+        client.delete(f"/api/v1/circle/members/{user_id}")
+        return RemovedMember(removed=True, username=username)
+
+    @mcp.tool(annotations=DESTRUCTIVE)
+    def wishlist_create_invite(email: str) -> InviteOutcome:
+        """Invite someone into your circle by email address.
+
+        If nobody holds that address, this sends a real email immediately and it
+        cannot be unsent. Read the address back to the user and get their
+        confirmation before calling.
+
+        If the address already belongs to a wishlist account, no email is sent:
+        they get a request to approve in the app instead, exactly as if you had
+        called wishlist_request_circle. Read the outcome field and tell the user
+        which of the two happened rather than assuming an email went out.
 
         Anyone who accepts joins your circle, which lets them see every profile
         field and wishlist item you have marked circle_only."""
         data = api().post("/api/v1/invites", {"email": email})
-        invite = (data or {}).get("invite", {})
-        return CreatedInvite(
-            email=invite.get("recipient_email", email),
-            state="sent",
-            expires_at=(invite.get("expires_at") or "")[:10],
-        )
+        return _invite_outcome(data, email)
 
     @mcp.tool(annotations=WRITE_IDEMPOTENT)
     def wishlist_accept_invite(invite_token: str) -> AcceptedInvite:
@@ -297,25 +410,40 @@ def _present(**kwargs) -> dict:
     """Only the fields the caller actually set.
 
     Sending an explicit null would clear a field the user never mentioned, which
-    is how an agent quietly wipes someone's address.
+    is how an agent quietly wipes someone's address. An empty list is kept: for
+    dietary and interests it means "nothing applies", which is an answer.
     """
     return {k: v for k, v in kwargs.items() if v is not None}
 
 
-def _profile_fields(data: dict | None) -> dict:
-    """The subset of an API profile the tool schemas carry.
+def _tags(interests: list[Interest] | None) -> list[dict] | None:
+    """Interests arrive as models and have to leave as JSON."""
+    if interests is None:
+        return None
+    return [tag.model_dump() for tag in interests]
+
+
+def _profile_fields(data: dict | None, model: type) -> dict:
+    """The subset of an API profile the given schema carries.
 
     id and user_id are dropped: they are database keys with no meaning to a
     model, and username already identifies the person.
     """
-    keep = set(GiftProfile.model_fields)
+    keep = set(model.model_fields)
     return {k: v for k, v in (data or {}).items() if k in keep}
 
 
 def _my_profile(data: dict | None) -> MyProfile:
-    return MyProfile(
-        **_profile_fields(data), visibility=(data or {}).get("visibility") or {}
-    )
+    fields = _profile_fields(data, MyProfile)
+    # visibility is one of MyProfile's own fields, so it arrives in the filtered
+    # dict already. A null from the API becomes {}, which reads as "all public".
+    fields["visibility"] = fields.get("visibility") or {}
+    return MyProfile(**fields)
+
+
+def _person(data: dict) -> Person:
+    keep = set(Person.model_fields)
+    return Person(**{k: v for k, v in data.items() if k in keep})
 
 
 def _item(data: dict) -> Item:
@@ -327,3 +455,70 @@ def _my_item(data: dict | None) -> MyItem:
     data = data or {}
     keep = set(MyItem.model_fields)
     return MyItem(**{k: v for k, v in data.items() if k in keep})
+
+
+def _request(data: dict) -> CircleRequest:
+    keep = set(CircleRequest.model_fields)
+    return CircleRequest(**{k: v for k, v in data.items() if k in keep})
+
+
+def _request_outcome(data: dict | None, *, fallback_username: str) -> RequestOutcome:
+    """Whether asking created a request or settled one that already existed.
+
+    Discriminated on the request's own status rather than the HTTP status, which
+    the client does not carry up. A request the API reports as already accepted
+    is one the other person had opened first.
+    """
+    request = (data or {}).get("request", {})
+    username = request.get("username") or fallback_username
+    if request.get("status") == "accepted":
+        return RequestOutcome(outcome="circle_joined", username=username)
+    return RequestOutcome(
+        outcome="request_sent", username=username, request_id=request.get("id")
+    )
+
+
+def _invite_outcome(data: dict | None, email: str) -> InviteOutcome:
+    """Which of the two things POST /invites did.
+
+    The endpoint answers `invite` for an address with no account behind it and
+    `request` for one that has an account. Reading only `invite` is how this tool
+    once reported a sent email for a request that emailed nobody.
+    """
+    body = data or {}
+    if "request" in body:
+        settled = _request_outcome(body, fallback_username="")
+        return InviteOutcome(
+            outcome=(
+                "circle_joined" if settled.outcome == "circle_joined" else "request_sent"
+            ),
+            username=settled.username or None,
+            request_id=settled.request_id,
+        )
+
+    invite = body.get("invite", {})
+    return InviteOutcome(
+        outcome="invite_emailed",
+        email=invite.get("recipient_email", email),
+        expires_at=(invite.get("expires_at") or "")[:10] or None,
+    )
+
+
+def _resolve_member(username: str) -> tuple[WishlistAPI, int]:
+    """Turn a username into the id the circle endpoint deletes by.
+
+    Every other tool addresses people by username, and swapping to a database id
+    for one destructive call is how the wrong person gets removed. The lookup
+    also means a name that is not in the circle fails before anything is deleted.
+    """
+    client = api()
+    data = client.get("/api/v1/circle/members")
+    for member in (data or {}).get("members", []):
+        if member.get("username") == username:
+            user_id = member.get("user_id")
+            if user_id is None:
+                break
+            return client, user_id
+    raise ToolError(
+        f"{username} is not in your circle. Use wishlist_list_circle to see who is."
+    )
