@@ -164,6 +164,12 @@ Each of these is a bug that reached production once.
   while unit tests still pass.
 - **`TestClient` follows redirects by default.** Pass `follow_redirects=False` when the
   point is that a path answers directly.
+- **Every path segment is encoded with `segment()`.** `httpx` applies RFC 3986
+  dot-segment removal before a request goes out, so an unencoded `username` or
+  `invite_token` containing `../` is not a 404: it is a different endpoint, called with
+  the user's own token and reported to the model under the name of the tool that was
+  invoked. A `?` does the same by starting a query string. These arguments are chosen by
+  a model that has read item names and bios other people wrote, so treat them as hostile.
 - **FastMCP matches `Accept` by substring.** It answers `406 Client must accept
   application/json` to a client sending `*/*`, which already does, and to one sending no
   header at all, which under RFC 9110 also does. `WildcardAccept` spells those out before
