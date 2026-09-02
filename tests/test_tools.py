@@ -98,6 +98,25 @@ async def test_the_irreversible_tools_are_marked_destructive():
     assert tools["wishlist_add_item"].annotations.destructiveHint is False
 
 
+async def test_every_tool_declares_all_four_annotation_hints():
+    """A missing hint is not a neutral omission. The spec reads an absent
+    destructiveHint as true, so a read tool that declares only readOnlyHint is
+    still advertising itself as destructive to a host that takes the default at
+    its word, and directories reject a surface that is partly annotated."""
+    async with Client(build_server()) as client:
+        tools = await client.list_tools()
+
+    for tool in tools:
+        for hint in (
+            "readOnlyHint",
+            "destructiveHint",
+            "idempotentHint",
+            "openWorldHint",
+        ):
+            value = getattr(tool.annotations, hint, None)
+            assert isinstance(value, bool), f"{tool.name} leaves {hint} unset"
+
+
 # --- the token is forwarded --------------------------------------------------
 
 
@@ -131,6 +150,60 @@ async def test_a_token_for_another_resource_never_reaches_the_api(keypair):
 
     assert "different resource" in str(excinfo.value)
     assert not route.called, "a refused token must not produce an upstream call"
+
+
+# --- arguments that came from somewhere else --------------------------------
+
+# Tool arguments are chosen by the calling model, and the model reads item
+# names, store notes, and bios that other people wrote. Every string that
+# reaches a URL is therefore attacker-shaped, and httpx removes dot segments
+# before a request goes out.
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    "tool",
+    ["wishlist_get_profile", "wishlist_get_wishlist", "wishlist_get_gift_guide"],
+)
+async def test_a_username_cannot_escape_its_path_segment(call, tool):
+    """Unencoded, `../../v1/profiles/me` is not a 404. It is a different
+    endpoint, called with this user's token and reported to the model under the
+    name of the tool that was invoked."""
+    route = respx.route(method="GET").mock(return_value=ok({"username": "x"}))
+
+    await call(tool, {"username": "../../v1/profiles/me"})
+
+    assert route.called
+    for sent in route.calls:
+        raw = sent.request.url.raw_path
+        # /api/v1/<collection>/<username> and nothing else.
+        assert raw.count(b"/") == 4, raw
+        assert raw.endswith(b"/..%2F..%2Fv1%2Fprofiles%2Fme"), raw
+
+
+@respx.mock
+async def test_an_invite_token_cannot_reach_another_endpoint(call):
+    """A `?` in the token would start a query string and swallow the `/accept`
+    this tool appends, turning an invite acceptance into any POST the user's own
+    token can make."""
+    escaped = respx.post(f"{API}/api/v1/circle/requests/5/accept").mock(
+        return_value=ok({"request": {"username": "mallory", "status": "accepted"}})
+    )
+    route = respx.route(method="POST").mock(
+        return_value=ok({"invite": {"inviter_username": "alice"}})
+    )
+
+    await call(
+        "wishlist_accept_invite",
+        {"invite_token": "x/../../circle/requests/5/accept?z="},
+    )
+
+    assert not escaped.called, "the token reached an endpoint of its own choosing"
+    sent = route.calls.last.request
+    assert sent.url.raw_path == (
+        b"/api/v1/invites/x%2F..%2F..%2Fcircle%2Frequests%2F5%2Faccept%3Fz%3D/accept"
+    )
+    assert not sent.url.query
 
 
 # --- reads -------------------------------------------------------------------

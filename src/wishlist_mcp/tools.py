@@ -20,7 +20,7 @@ from fastmcp.exceptions import ToolError
 from fastmcp.server.dependencies import get_http_headers
 
 from wishlist_mcp.auth import InvalidAccessToken, authenticate
-from wishlist_mcp.client import WishlistAPI
+from wishlist_mcp.client import WishlistAPI, segment
 from wishlist_mcp.schemas import (
     AcceptedInvite,
     CircleMember,
@@ -46,10 +46,31 @@ from wishlist_mcp.schemas import (
     Visibility,
 )
 
-READ = {"readOnlyHint": True, "openWorldHint": False}
-WRITE = {"readOnlyHint": False, "destructiveHint": False, "openWorldHint": False}
+# All four hints, spelled out on every tool. A missing hint is not neutral: the
+# spec reads an absent destructiveHint as true, so a read tool that declares
+# only readOnlyHint still advertises itself as destructive to a host that takes
+# the default at its word.
+READ = {
+    "readOnlyHint": True,
+    "destructiveHint": False,
+    "idempotentHint": True,
+    "openWorldHint": False,
+}
+WRITE = {
+    "readOnlyHint": False,
+    "destructiveHint": False,
+    "idempotentHint": False,
+    "openWorldHint": False,
+}
 WRITE_IDEMPOTENT = {**WRITE, "idempotentHint": True}
-DESTRUCTIVE = {"readOnlyHint": False, "destructiveHint": True, "openWorldHint": False}
+# Not idempotent, deliberately: a second delete 404s, a second removal fails,
+# and a second invite sends another email to a real person.
+DESTRUCTIVE = {
+    "readOnlyHint": False,
+    "destructiveHint": True,
+    "idempotentHint": False,
+    "openWorldHint": False,
+}
 
 SEARCH_LIMIT = 20
 
@@ -108,8 +129,8 @@ def register(mcp: FastMCP) -> None:
         answer different questions: allergies is harm, dietary is a rule kept by
         choice, and neither implies the other."""
         client = api()
-        profile = client.get(f"/api/v1/profiles/{username}")
-        wishlist = client.get(f"/api/v1/wishlists/{username}")
+        profile = client.get(f"/api/v1/profiles/{segment(username)}")
+        wishlist = client.get(f"/api/v1/wishlists/{segment(username)}")
         return GiftGuide(
             profile=GiftProfile(**_profile_fields(profile, GiftProfile)),
             items=[_item(i) for i in (wishlist or {}).get("items", [])],
@@ -120,14 +141,14 @@ def register(mcp: FastMCP) -> None:
     def wishlist_get_profile(username: str) -> GiftProfile:
         """One person's profile without their wishlist. Prefer
         wishlist_get_gift_guide unless you specifically do not want the items."""
-        data = api().get(f"/api/v1/profiles/{username}")
+        data = api().get(f"/api/v1/profiles/{segment(username)}")
         return GiftProfile(**_profile_fields(data, GiftProfile))
 
     @mcp.tool(annotations=READ)
     def wishlist_get_wishlist(username: str) -> list[Item]:
         """One person's wishlist without their profile. Prefer
         wishlist_get_gift_guide unless you specifically do not want the profile."""
-        data = api().get(f"/api/v1/wishlists/{username}")
+        data = api().get(f"/api/v1/wishlists/{segment(username)}")
         return [_item(i) for i in (data or {}).get("items", [])]
 
     @mcp.tool(annotations=READ)
@@ -174,7 +195,7 @@ def register(mcp: FastMCP) -> None:
     def wishlist_preview_invite(invite_token: str) -> InvitePreview:
         """See who sent an invite and whether it is still valid, before accepting
         it. The token is the long code at the end of an invite link."""
-        data = api().get(f"/api/v1/invites/{invite_token}")
+        data = api().get(f"/api/v1/invites/{segment(invite_token)}")
         invite = (data or {}).get("invite", {})
         return InvitePreview(
             inviter_username=invite.get("inviter_username", ""),
@@ -396,7 +417,7 @@ def register(mcp: FastMCP) -> None:
         the profile fields and wishlist items you have marked circle_only. Tell the
         user that before calling. Use wishlist_preview_invite first to check who
         the invite is from."""
-        data = api().post(f"/api/v1/invites/{invite_token}/accept")
+        data = api().post(f"/api/v1/invites/{segment(invite_token)}/accept")
         invite = (data or {}).get("invite", {})
         return AcceptedInvite(
             accepted=True, inviter_username=invite.get("inviter_username", "")

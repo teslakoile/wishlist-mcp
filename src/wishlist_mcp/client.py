@@ -7,6 +7,7 @@ point of the split: one implementation of the rules, two ways in.
 """
 
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 from fastmcp.exceptions import ToolError
@@ -71,6 +72,21 @@ class WishlistAPI:
 
     def delete(self, path: str) -> Any:
         return self._request("DELETE", path)
+
+
+def segment(value: str) -> str:
+    """Encode one path segment so it can only ever be one path segment.
+
+    httpx applies RFC 3986 dot-segment removal before a request goes out, so a
+    username of `../../circle/requests/5/accept` is not a 404: it is a different
+    endpoint, called with this user's own token and reported to the model under
+    the name of the tool that was invoked. A `?` does the same by starting a
+    query string and swallowing whatever the path appended after it.
+
+    These values arrive from the calling model, which reads item names, notes,
+    and bios other people wrote. Treat every one of them as hostile.
+    """
+    return quote(str(value), safe="")
 
 
 def _message_for(status: int, body: dict) -> str:
