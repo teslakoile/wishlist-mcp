@@ -1,4 +1,4 @@
-"""The nineteen tools, driven through a real MCP client with the wishlist API stubbed.
+"""The twenty-four tools, driven through a real MCP client with the wishlist API stubbed.
 
 What these check is this server's own job: shaping requests, shaping responses,
 and turning API errors into sentences a model can act on. The visibility and
@@ -80,6 +80,11 @@ async def test_every_tool_in_the_contract_is_present():
         "wishlist_accept_circle_request",
         "wishlist_decline_circle_request",
         "wishlist_remove_circle_member",
+        "wishlist_upcoming_occasions",
+        "wishlist_list_notifications",
+        "wishlist_get_reminder_preferences",
+        "wishlist_update_reminder_preferences",
+        "wishlist_mark_notifications_read",
     }
 
 
@@ -859,3 +864,185 @@ async def test_the_readme_lists_exactly_the_tools_that_exist():
         registered = {t.name for t in await client.list_tools()}
 
     assert documented == registered
+
+
+# --- calendar, reminders, notifications --------------------------------------
+
+
+@respx.mock
+async def test_upcoming_occasions_carries_the_person_and_never_a_birth_year(call):
+    respx.get(f"{API}/api/v1/calendar/upcoming").mock(
+        return_value=ok(
+            {
+                "window_days": 90,
+                "from_date": "2026-09-06",
+                "to_date": "2026-12-05",
+                "occasions": [
+                    {
+                        "kind": "birthday",
+                        "key": "birthday:alice",
+                        "date": "2026-09-14",
+                        "days_away": 8,
+                        "title": "Alice Rivera's birthday",
+                        "person": {
+                            "username": "alice",
+                            "display_name": "Alice Rivera",
+                            "avatar_url": None,
+                        },
+                        "wishlist_url": "/alice",
+                    },
+                    {
+                        "kind": "holiday",
+                        "key": "holiday:christmas",
+                        "date": "2026-12-25",
+                        "days_away": 110,
+                        "title": "Christmas Day",
+                        "person": None,
+                        "wishlist_url": None,
+                    },
+                ],
+            }
+        )
+    )
+
+    result = _plain(await call("wishlist_upcoming_occasions"))
+
+    assert result["from_date"] == "2026-09-06"
+    birthday, holiday = result["occasions"]
+    assert birthday["person"]["username"] == "alice"
+    assert birthday["days_away"] == 8
+    assert holiday["person"] is None
+    # The API never sends one, and nothing here invents one.
+    assert "1990" not in json.dumps(result)
+
+
+@respx.mock
+async def test_the_occasion_window_is_capped(call):
+    route = respx.get(f"{API}/api/v1/calendar/upcoming").mock(
+        return_value=ok({"from_date": "", "to_date": "", "occasions": []})
+    )
+
+    await call("wishlist_upcoming_occasions", {"days": 9000})
+
+    assert route.calls.last.request.url.params["days"] == "365"
+
+
+@respx.mock
+async def test_listing_notifications_does_not_mark_them_read(call):
+    listing = respx.get(f"{API}/api/v1/notifications").mock(
+        return_value=ok(
+            {
+                "unread_count": 1,
+                "notifications": [
+                    {
+                        "id": 7,
+                        "kind": "occasion_reminder",
+                        "title": "Alice Rivera's birthday is in 7 days",
+                        "body": "14 September.",
+                        "link_url": "/alice",
+                        "payload": {"kind": "birthday"},
+                        "read_at": None,
+                        "created_at": "2026-09-07T09:00:00Z",
+                    }
+                ],
+            }
+        )
+    )
+    read_all = respx.post(f"{API}/api/v1/notifications/read-all").mock(
+        return_value=ok({"marked_read": 1})
+    )
+
+    result = _plain(await call("wishlist_list_notifications"))
+
+    assert result["unread_count"] == 1
+    assert result["notifications"][0]["id"] == 7
+    assert listing.called
+    assert not read_all.called
+
+
+@respx.mock
+async def test_marking_one_read_addresses_that_id(call):
+    route = respx.post(f"{API}/api/v1/notifications/7/read").mock(
+        return_value=ok({"notification": {"id": 7}})
+    )
+
+    result = _plain(
+        await call("wishlist_mark_notifications_read", {"notification_id": 7})
+    )
+
+    assert route.called
+    assert result["marked_read"] == 1
+
+
+@respx.mock
+async def test_marking_all_read_reports_what_actually_moved(call):
+    respx.post(f"{API}/api/v1/notifications/read-all").mock(
+        return_value=ok({"marked_read": 0})
+    )
+
+    result = _plain(await call("wishlist_mark_notifications_read"))
+
+    # Zero is success: they were already read.
+    assert result["marked_read"] == 0
+
+
+@respx.mock
+async def test_reminder_preferences_fall_back_to_the_documented_defaults(call):
+    """A response missing a key must not become False by accident."""
+    respx.get(f"{API}/api/v1/reminders/preferences").mock(
+        return_value=ok({"preferences": {}})
+    )
+
+    result = _plain(await call("wishlist_get_reminder_preferences"))
+
+    assert result == {
+        "email_enabled": True,
+        "lead_days": [7, 1],
+        "region": "US",
+        "birthday_reminders": True,
+        "holiday_reminders": True,
+        "announce_birthday": True,
+    }
+
+
+@respx.mock
+async def test_updating_preferences_sends_only_what_was_set(call):
+    route = respx.patch(f"{API}/api/v1/reminders/preferences").mock(
+        return_value=ok(
+            {
+                "preferences": {
+                    "email_enabled": True,
+                    "lead_days": [14, 1],
+                    "region": "GB",
+                    "birthday_reminders": True,
+                    "holiday_reminders": True,
+                    "announce_birthday": True,
+                }
+            }
+        )
+    )
+
+    await call("wishlist_update_reminder_preferences", {"region": "GB"})
+
+    assert json.loads(route.calls.last.request.content) == {"region": "GB"}
+
+
+@respx.mock
+async def test_updating_preferences_with_nothing_to_change_is_refused(call):
+    route = respx.patch(f"{API}/api/v1/reminders/preferences")
+
+    with pytest.raises(ToolError, match="Nothing to change"):
+        await call("wishlist_update_reminder_preferences")
+
+    assert not route.called
+
+
+@respx.mock
+async def test_an_unsupported_region_never_reaches_the_api(call):
+    """Region is a Literal, so the client rejects it before a request goes out."""
+    route = respx.patch(f"{API}/api/v1/reminders/preferences")
+
+    with pytest.raises(ToolError):
+        await call("wishlist_update_reminder_preferences", {"region": "ZZ"})
+
+    assert not route.called

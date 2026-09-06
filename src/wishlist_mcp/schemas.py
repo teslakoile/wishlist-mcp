@@ -337,3 +337,120 @@ class InviteOutcome(BaseModel):
 class AcceptedInvite(BaseModel):
     accepted: bool
     inviter_username: str
+
+
+# Mirrors REGIONS in the wishlist API's services/occasions.py. Repeated rather
+# than imported, for the same reason the profile enums are: this server does not
+# depend on the backend package. When the API adds a region, add it here too.
+Region = Literal[
+    "US",
+    "CA",
+    "GB",
+    "IE",
+    "AU",
+    "NZ",
+    "PH",
+    "IN",
+    "SG",
+    "DE",
+    "FR",
+    "ES",
+    "IT",
+    "MX",
+    "BR",
+    "JP",
+    "ZA",
+]
+
+OccasionKind = Literal["birthday", "holiday"]
+
+
+class Occasion(BaseModel):
+    """One date coming up, and who it belongs to."""
+
+    kind: OccasionKind = Field(
+        description="'birthday' belongs to a person in your circle and carries "
+        "them in person. 'holiday' is a date this user's region marks and has no "
+        "person attached."
+    )
+    date: str = Field(
+        description="ISO-8601 date of the next occurrence, never the year of "
+        "birth. A birthday returns the coming anniversary, so the year is always "
+        "this year or next."
+    )
+    days_away: int = Field(description="Whole days from today. 0 means today.")
+    title: str
+    person: Person | None = Field(
+        None,
+        description="The person whose birthday this is. Null for a holiday. Pass "
+        "their username to wishlist_get_gift_guide for what to actually buy.",
+    )
+
+
+class UpcomingOccasions(BaseModel):
+    """What is coming up for the signed-in user.
+
+    Birthdays appear only for people whose circle this user is in, and only when
+    that person filled theirs in and left announce_birthday on. An absent birthday
+    is not evidence that someone has none.
+    """
+
+    from_date: str
+    to_date: str
+    occasions: list[Occasion] = Field(description="Soonest first.")
+
+
+class ReminderPreferences(BaseModel):
+    """How this user wants occasion reminders, and whether they are one."""
+
+    email_enabled: bool = Field(
+        description="False stops the email only. Reminders still reach the "
+        "in-app feed and the calendar."
+    )
+    lead_days: list[int] = Field(
+        description="How many days before an occasion a reminder is sent, "
+        "longest notice first. One to four values, each 0 to 60."
+    )
+    region: Region = Field(
+        description="Decides which holidays apply and what date they fall on. "
+        "Mother's Day is the second Sunday of May in the US and three weeks "
+        "before Easter in the UK."
+    )
+    birthday_reminders: bool
+    holiday_reminders: bool
+    announce_birthday: bool = Field(
+        description="Whether other people are reminded about THIS user's "
+        "birthday. It acts on other people's mail, not on this user's."
+    )
+
+
+class Notification(BaseModel):
+    """One entry in the in-app feed."""
+
+    id: int = Field(description="Pass this to wishlist_mark_notification_read.")
+    kind: Literal[
+        "occasion_reminder",
+        "invite_accepted",
+        "circle_request_received",
+        "circle_request_accepted",
+    ]
+    title: str
+    body: str | None = None
+    read_at: str | None = Field(
+        None, description="ISO-8601 UTC, or null when it is still unread."
+    )
+    created_at: str | None = Field(None, description="ISO-8601 UTC.")
+
+
+class NotificationFeed(BaseModel):
+    unread_count: int
+    notifications: list[Notification] = Field(description="Newest first.")
+
+
+class ReadNotifications(BaseModel):
+    """What marking notifications read actually changed."""
+
+    marked_read: int = Field(
+        description="How many rows moved from unread to read. 0 means they were "
+        "already read, which is success, not a failure."
+    )
