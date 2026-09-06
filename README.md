@@ -87,7 +87,7 @@ without the year.
 `wishlist_upcoming_occasions` answers "whose birthday is next" in one call, and pairs
 with the gift guide: it hands back a username and a date, and the guide turns that into
 something to buy. Birthdays in it are only people whose circle the caller is in, and
-only those who left `announce_birthday` on, so an absent birthday is not evidence that
+only those who filled one in, so an absent birthday is not evidence that
 someone has none.
 
 The three destructive tools carry `destructiveHint: true`, so clients that confirm

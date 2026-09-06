@@ -1259,7 +1259,6 @@ async def test_reminder_preferences_fall_back_to_the_documented_defaults(call):
         "region": "US",
         "birthday_reminders": True,
         "holiday_reminders": True,
-        "announce_birthday": True,
     }
 
 
@@ -1274,7 +1273,6 @@ async def test_updating_preferences_sends_only_what_was_set(call):
                     "region": "GB",
                     "birthday_reminders": True,
                     "holiday_reminders": True,
-                    "announce_birthday": True,
                 }
             }
         )

@@ -590,7 +590,6 @@ def register(mcp: FastMCP) -> None:
         region: Region | None = None,
         birthday_reminders: bool | None = None,
         holiday_reminders: bool | None = None,
-        announce_birthday: bool | None = None,
     ) -> ReminderPreferences:
         """Change how the signed-in user gets occasion reminders. Only the
         arguments you pass are changed.
@@ -599,16 +598,15 @@ def register(mcp: FastMCP) -> None:
         wishlist_get_reminder_preferences first and send the full set you want.
         One to four values, each 0 to 60, where 0 means the day itself.
 
-        announce_birthday is the one setting that acts on other people's mail:
-        turning it off removes this user's birthday from every circle member's
-        calendar. Confirm that with the user before changing it."""
+        Every setting here is about this user's own mail. None of them changes
+        what anyone else receives, including whether this user's own birthday is
+        announced to their circle, which is not configurable."""
         payload = {
             "email_enabled": email_enabled,
             "lead_days": lead_days,
             "region": region,
             "birthday_reminders": birthday_reminders,
             "holiday_reminders": holiday_reminders,
-            "announce_birthday": announce_birthday,
         }
         changes = {k: v for k, v in payload.items() if v is not None}
         if not changes:
@@ -791,5 +789,4 @@ def _preferences(data: dict) -> ReminderPreferences:
         region=data.get("region", "US"),
         birthday_reminders=bool(data.get("birthday_reminders", True)),
         holiday_reminders=bool(data.get("holiday_reminders", True)),
-        announce_birthday=bool(data.get("announce_birthday", True)),
     )
