@@ -509,8 +509,8 @@ class UpcomingOccasions(BaseModel):
     """What is coming up for the signed-in user.
 
     Birthdays appear only for people whose circle this user is in, and only when
-    that person filled theirs in and left announce_birthday on. An absent birthday
-    is not evidence that someone has none.
+    that person filled theirs in. An absent birthday is not evidence that someone
+    has none: it may simply be unset, or they may not be in this user's circle.
     """
 
     from_date: str
@@ -536,10 +536,6 @@ class ReminderPreferences(BaseModel):
     )
     birthday_reminders: bool
     holiday_reminders: bool
-    announce_birthday: bool = Field(
-        description="Whether other people are reminded about THIS user's "
-        "birthday. It acts on other people's mail, not on this user's."
-    )
 
 
 class Notification(BaseModel):
