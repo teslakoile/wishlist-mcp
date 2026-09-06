@@ -1,4 +1,4 @@
-"""The nineteen wishlist tools.
+"""The twenty-four wishlist tools.
 
 Parity is the rule: this exposes what the authenticated user can already do by
 hand in the web app, with no agent-only privileges and nothing the app cannot do
@@ -36,13 +36,20 @@ from wishlist_mcp.schemas import (
     Item,
     MyItem,
     MyProfile,
+    Notification,
+    NotificationFeed,
+    Occasion,
     PendingRequests,
     Person,
     PriceComfort,
     Priority,
+    ReadNotifications,
+    Region,
+    ReminderPreferences,
     RemovedMember,
     RequestOutcome,
     SettledRequest,
+    UpcomingOccasions,
     Visibility,
 )
 
@@ -73,6 +80,13 @@ DESTRUCTIVE = {
 }
 
 SEARCH_LIMIT = 20
+# The calendar endpoint accepts 1-365. Ninety days is the default because it
+# reaches the next occasion for almost anyone with a circle, without returning a
+# year of dates the model has to skim past.
+CALENDAR_DEFAULT_DAYS = 90
+CALENDAR_MAX_DAYS = 365
+NOTIFICATION_LIMIT = 50
+NOTIFICATION_MAX_LIMIT = 200
 
 
 def api() -> WishlistAPI:
@@ -202,6 +216,62 @@ def register(mcp: FastMCP) -> None:
             inviter_display_name=invite.get("inviter_display_name"),
             state=invite.get("state", "expired"),
         )
+
+    @mcp.tool(annotations=READ)
+    def wishlist_upcoming_occasions(
+        days: int = CALENDAR_DEFAULT_DAYS,
+    ) -> UpcomingOccasions:
+        """Birthdays and holidays coming up for you, soonest first. Start here for
+        "whose birthday is next" or "what should I be shopping for".
+
+        Birthdays are only the people whose circle you are in, and only those who
+        filled a birthday in and left it announced. Someone missing from this list
+        may still have a birthday you are not shown, so never tell the user that a
+        person has none.
+
+        Holidays follow the region in the user's reminder settings, which is why
+        Mother's Day here may not be the date you would assume.
+
+        A birthday carries the coming anniversary, never a year of birth. Pass a
+        person's username to wishlist_get_gift_guide to turn a date into a gift."""
+        window = max(1, min(days, CALENDAR_MAX_DAYS))
+        data = api().get("/api/v1/calendar/upcoming", {"days": window}) or {}
+        return UpcomingOccasions(
+            from_date=data.get("from_date", ""),
+            to_date=data.get("to_date", ""),
+            occasions=[_occasion(o) for o in data.get("occasions", [])],
+        )
+
+    @mcp.tool(annotations=READ)
+    def wishlist_list_notifications(
+        unread_only: bool = False, limit: int = NOTIFICATION_LIMIT
+    ) -> NotificationFeed:
+        """Your in-app notifications: occasion reminders, invites people accepted,
+        and circle requests.
+
+        Reading them here does not mark them read. Use
+        wishlist_mark_notifications_read for that, and only when the user asks."""
+        capped = max(1, min(limit, NOTIFICATION_MAX_LIMIT))
+        params = {"limit": capped}
+        if unread_only:
+            params["unread_only"] = "true"
+        data = api().get("/api/v1/notifications", params) or {}
+        return NotificationFeed(
+            unread_count=int(data.get("unread_count") or 0),
+            notifications=[_notification(n) for n in data.get("notifications", [])],
+        )
+
+    @mcp.tool(annotations=READ)
+    def wishlist_get_reminder_preferences() -> ReminderPreferences:
+        """How the user currently wants occasion reminders: whether email is on,
+        how far ahead, which region's holidays, and whether their own birthday is
+        announced to their circle.
+
+        Read this before changing any of it, because
+        wishlist_update_reminder_preferences replaces lead_days wholesale rather
+        than adding to it."""
+        data = api().get("/api/v1/reminders/preferences") or {}
+        return _preferences(data.get("preferences", {}))
 
     # --- writes --------------------------------------------------------------
 
@@ -423,25 +493,57 @@ def register(mcp: FastMCP) -> None:
             accepted=True, inviter_username=invite.get("inviter_username", "")
         )
 
+    @mcp.tool(annotations=WRITE_IDEMPOTENT)
+    def wishlist_update_reminder_preferences(
+        email_enabled: bool | None = None,
+        lead_days: list[int] | None = None,
+        region: Region | None = None,
+        birthday_reminders: bool | None = None,
+        holiday_reminders: bool | None = None,
+        announce_birthday: bool | None = None,
+    ) -> ReminderPreferences:
+        """Change how the signed-in user gets occasion reminders. Only the
+        arguments you pass are changed.
 
-# --- shaping -----------------------------------------------------------------
+        lead_days REPLACES the whole list rather than adding to it, so read
+        wishlist_get_reminder_preferences first and send the full set you want.
+        One to four values, each 0 to 60, where 0 means the day itself.
 
+        announce_birthday is the one setting that acts on other people's mail:
+        turning it off removes this user's birthday from every circle member's
+        calendar. Confirm that with the user before changing it."""
+        payload = {
+            "email_enabled": email_enabled,
+            "lead_days": lead_days,
+            "region": region,
+            "birthday_reminders": birthday_reminders,
+            "holiday_reminders": holiday_reminders,
+            "announce_birthday": announce_birthday,
+        }
+        changes = {k: v for k, v in payload.items() if v is not None}
+        if not changes:
+            raise ToolError(
+                "Nothing to change. Pass at least one setting, or call "
+                "wishlist_get_reminder_preferences to read the current ones."
+            )
+        data = api().patch("/api/v1/reminders/preferences", changes) or {}
+        return _preferences(data.get("preferences", {}))
 
-def _present(**kwargs) -> dict:
-    """Only the fields the caller actually set.
+    @mcp.tool(annotations=WRITE_IDEMPOTENT)
+    def wishlist_mark_notifications_read(
+        notification_id: int | None = None,
+    ) -> ReadNotifications:
+        """Mark one notification read, or every unread one when you pass no id.
 
-    Sending an explicit null would clear a field the user never mentioned, which
-    is how an agent quietly wipes someone's address. An empty list is kept: for
-    dietary and interests it means "nothing applies", which is an answer.
-    """
-    return {k: v for k, v in kwargs.items() if v is not None}
-
-
-def _tags(interests: list[Interest] | None) -> list[dict] | None:
-    """Interests arrive as models and have to leave as JSON."""
-    if interests is None:
-        return None
-    return [tag.model_dump() for tag in interests]
+        Do this only when the user asks. Clearing someone's unread list as a side
+        effect of reading it to them takes away the thing that told them there was
+        something to look at."""
+        client = api()
+        if notification_id is None:
+            data = client.post("/api/v1/notifications/read-all") or {}
+            return ReadNotifications(marked_read=int(data.get("marked_read") or 0))
+        client.post(f"/api/v1/notifications/{int(notification_id)}/read")
+        return ReadNotifications(marked_read=1)
 
 
 def _profile_fields(data: dict | None, model: type) -> dict:
@@ -542,4 +644,57 @@ def _resolve_member(username: str) -> tuple[WishlistAPI, int]:
             return client, user_id
     raise ToolError(
         f"{username} is not in your circle. Use wishlist_list_circle to see who is."
+    )
+
+
+# --- shaping -----------------------------------------------------------------
+
+
+def _present(**kwargs) -> dict:
+    """Only the fields the caller actually set.
+
+    Sending an explicit null would clear a field the user never mentioned, which
+    is how an agent quietly wipes someone's address. An empty list is kept: for
+    dietary and interests it means "nothing applies", which is an answer.
+    """
+    return {k: v for k, v in kwargs.items() if v is not None}
+
+
+def _tags(interests: list[Interest] | None) -> list[dict] | None:
+    """Interests arrive as models and have to leave as JSON."""
+    if interests is None:
+        return None
+    return [tag.model_dump() for tag in interests]
+
+
+def _occasion(data: dict) -> Occasion:
+    person = data.get("person")
+    return Occasion(
+        kind=data.get("kind", "holiday"),
+        date=data.get("date", ""),
+        days_away=int(data.get("days_away") or 0),
+        title=data.get("title", ""),
+        person=_person(person) if person else None,
+    )
+
+
+def _notification(data: dict) -> Notification:
+    return Notification(
+        id=int(data.get("id") or 0),
+        kind=data.get("kind", "occasion_reminder"),
+        title=data.get("title", ""),
+        body=data.get("body"),
+        read_at=data.get("read_at"),
+        created_at=data.get("created_at"),
+    )
+
+
+def _preferences(data: dict) -> ReminderPreferences:
+    return ReminderPreferences(
+        email_enabled=bool(data.get("email_enabled", True)),
+        lead_days=[int(d) for d in (data.get("lead_days") or [7, 1])],
+        region=data.get("region", "US"),
+        birthday_reminders=bool(data.get("birthday_reminders", True)),
+        holiday_reminders=bool(data.get("holiday_reminders", True)),
+        announce_birthday=bool(data.get("announce_birthday", True)),
     )

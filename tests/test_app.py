@@ -121,7 +121,7 @@ def test_a_handshake_lists_every_tool(client, bearer):
     )
 
     assert response.status_code == 200, response.text
-    assert len(response.json()["result"]["tools"]) == 19
+    assert len(response.json()["result"]["tools"]) == 24
 
 
 @respx.mock

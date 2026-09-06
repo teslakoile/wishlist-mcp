@@ -43,7 +43,7 @@ consent screen; it only verifies what AuthKit signed.
 
 ## The tools
 
-Nineteen, one per thing you can already do by hand in the web app. Parity is the rule:
+Twenty-four, one per thing you can already do by hand in the web app. Parity is the rule:
 no agent-only privileges, and nothing the app itself cannot do.
 
 | Tool | Kind |
@@ -57,6 +57,9 @@ no agent-only privileges, and nothing the app itself cannot do.
 | `wishlist_list_circle` | read |
 | `wishlist_list_circle_requests` | read |
 | `wishlist_preview_invite` | read |
+| `wishlist_upcoming_occasions` | read |
+| `wishlist_list_notifications` | read |
+| `wishlist_get_reminder_preferences` | read |
 | `wishlist_add_item` | write |
 | `wishlist_update_item` | write |
 | `wishlist_update_my_profile` | write |
@@ -64,6 +67,8 @@ no agent-only privileges, and nothing the app itself cannot do.
 | `wishlist_accept_circle_request` | write |
 | `wishlist_decline_circle_request` | write |
 | `wishlist_accept_invite` | write |
+| `wishlist_update_reminder_preferences` | write |
+| `wishlist_mark_notifications_read` | write |
 | `wishlist_create_invite` | **destructive** |
 | `wishlist_delete_item` | **destructive** |
 | `wishlist_remove_circle_member` | **destructive** |
@@ -73,6 +78,12 @@ reason anyone connects this server, and without it the gift-giver journey costs 
 round trips. It carries the fields that actually rule a gift in or out: dietary rules
 and allergies, interests, price comfort, what they already own, and their birthday
 without the year.
+
+`wishlist_upcoming_occasions` answers "whose birthday is next" in one call, and pairs
+with the gift guide: it hands back a username and a date, and the guide turns that into
+something to buy. Birthdays in it are only people whose circle the caller is in, and
+only those who left `announce_birthday` on, so an absent birthday is not evidence that
+someone has none.
 
 The three destructive tools carry `destructiveHint: true`, so clients that confirm
 irreversible actions will ask first. Sending an invite emails a real person and cannot be
