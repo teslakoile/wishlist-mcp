@@ -865,6 +865,7 @@ def _nudge_payload(**over):
         "status": "pending",
         "prompt": "list_current",
         "question": "Is your wishlist still up to date?",
+        "signed": True,
         "answer": None,
         "answer_label": None,
         "user_id": 42,
@@ -950,6 +951,7 @@ async def test_a_list_scoped_question_sends_no_item_id(call):
     assert json.loads(route.calls.last.request.content) == {
         "username": "sarah",
         "prompt": "list_current",
+        "signed": False,
     }
 
 
@@ -1063,6 +1065,47 @@ async def test_an_answer_that_belongs_to_another_question_never_leaves_here(call
     is refused by the schema before a request is made."""
     with pytest.raises(ToolError):
         await call("wishlist_answer_nudge", {"nudge_id": 9, "answer": "maybe_next_year"})
+
+
+@respx.mock
+async def test_a_nudge_is_sent_anonymously_unless_the_user_asks_otherwise(call):
+    """The default has to survive the wire, not just the signature. Asking about
+    an item under the user's name tells the recipient who is buying it."""
+    route = respx.post(f"{API}/api/v1/circle/nudges").mock(
+        return_value=ok({"nudge": _nudge_payload(direction="outgoing", signed=False)})
+    )
+
+    await call("wishlist_send_nudge", {"username": "sarah", "prompt": "add_ideas"})
+    assert json.loads(route.calls.last.request.content)["signed"] is False
+
+    await call(
+        "wishlist_send_nudge",
+        {"username": "sarah", "prompt": "add_ideas", "signed": True},
+    )
+    assert json.loads(route.calls.last.request.content)["signed"] is True
+
+
+@respx.mock
+async def test_an_anonymous_incoming_nudge_carries_no_username(call):
+    """The server withholds it, and the tool passes the absence through rather
+    than substituting anything. A model that gets a name here would report one."""
+    respx.get(f"{API}/api/v1/circle/nudges").mock(
+        return_value=ok(
+            {
+                "incoming": [
+                    _nudge_payload(signed=False, username=None, display_name=None)
+                ],
+                "outgoing": [],
+            }
+        )
+    )
+
+    nudges = await call("wishlist_list_nudges")
+
+    assert nudges["incoming"][0]["username"] is None
+    assert nudges["incoming"][0]["signed"] is False
+    # The row the model reads must not name anyone anywhere.
+    assert "sarah" not in str(nudges["incoming"][0])
 
 
 # --- the README is part of the interface --------------------------------------

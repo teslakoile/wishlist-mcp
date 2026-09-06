@@ -226,7 +226,12 @@ def register(mcp: FastMCP) -> None:
 
         incoming is yours to settle with wishlist_answer_nudge or
         wishlist_dismiss_nudge. outgoing carries the answers to questions you
-        asked. Both carry the nudge id those tools need."""
+        asked. Both carry the nudge id those tools need.
+
+        An incoming nudge with a null username was sent anonymously, which is the
+        default. Report it as "someone in your circle" and do not try to work out
+        who from the circle list: the server withheld the name on purpose, and
+        naming a guess is worse than naming nobody."""
         data = api().get("/api/v1/circle/nudges")
         return Nudges(
             incoming=[_nudge(n) for n in (data or {}).get("incoming", [])],
@@ -494,8 +499,14 @@ def register(mcp: FastMCP) -> None:
         username: str,
         prompt: NudgePrompt,
         item_id: int | None = None,
+        signed: bool = False,
     ) -> Nudge:
         """Ask someone in your circle one of the catalogue questions.
+
+        Anonymous unless signed is true, and leave it false unless the user asks
+        to be named. Asking whether someone still wants an item, under your
+        user's name, tells that person who is buying it, and the surprise is what
+        this product is for.
 
         This emails a real person, so read the question and the name back to the
         user and get their confirmation before calling. It is a poke, not a
@@ -509,7 +520,9 @@ def register(mcp: FastMCP) -> None:
         more than once a day per person, for a week after they dismiss one, and
         after ten in a day. Every refusal says which and when to try again: report
         it to the user rather than retrying."""
-        payload = _present(username=username, prompt=prompt, item_id=item_id)
+        payload = _present(
+            username=username, prompt=prompt, item_id=item_id, signed=signed
+        )
         data = api().post("/api/v1/circle/nudges", payload)
         return _nudge((data or {}).get("nudge", {}))
 

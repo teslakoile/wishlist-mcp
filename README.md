@@ -100,7 +100,16 @@ both ways at once, and getting back in needs a fresh request they have to accept
 
 A nudge is a short question between two people already in the same circle: is your
 wishlist still current, do you still want this item, are your sizes still right, could
-you add a few ideas. The wording is not the caller's. `wishlist_list_nudge_prompts`
+you add a few ideas.
+
+It is anonymous by default. `wishlist_send_nudge` takes `signed`, which defaults to
+false; leave it there unless the user asks to be named, because asking whether someone
+still wants an item, under your user's name, tells that person who is buying it. On the
+receiving side an incoming nudge with a null `username` was sent anonymously: report it
+as "someone in your circle" and do not try to work out who from `wishlist_list_circle`.
+The server withheld the name deliberately, and naming a guess is worse than naming nobody.
+
+The wording is not the caller's. `wishlist_list_nudge_prompts`
 serves the catalogue, `wishlist_send_nudge` takes a prompt key, and nothing an agent
 writes is delivered to the recipient. That is the point: with no free-text field there
 is nothing to moderate and nothing a model can be argued into sending on someone's

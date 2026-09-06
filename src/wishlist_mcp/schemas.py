@@ -367,11 +367,23 @@ class Nudge(BaseModel):
         description="The question in words. Quote this, do not "
         "invent a phrasing for the prompt key."
     )
+    signed: bool = Field(
+        False,
+        description="Whether the sender put their name to it. Nudges are "
+        "anonymous by default, and on an incoming one this is why username is "
+        "null.",
+    )
     answer: NudgeAnswer | None = None
     answer_label: str | None = Field(
         None, description="The answer in words, when there is one."
     )
-    username: str = Field(description="Always the other person, never you.")
+    username: str | None = Field(
+        None,
+        description="The other person, never you. Null on an incoming nudge "
+        "nobody signed: the server withholds it, so there is no way to find out "
+        "who asked and no point looking. Say 'someone in your circle' and do not "
+        "guess from the circle list. Always present on a nudge you sent.",
+    )
     display_name: str | None = None
     item: NudgeItem | None = Field(
         None,
