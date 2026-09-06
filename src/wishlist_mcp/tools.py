@@ -1,4 +1,4 @@
-"""The twenty-four wishlist tools.
+"""The twenty-nine wishlist tools.
 
 Parity is the rule: this exposes what the authenticated user can already do by
 hand in the web app, with no agent-only privileges and nothing the app cannot do
@@ -38,6 +38,11 @@ from wishlist_mcp.schemas import (
     MyProfile,
     Notification,
     NotificationFeed,
+    Nudge,
+    NudgeAnswer,
+    NudgePrompt,
+    NudgePromptSpec,
+    Nudges,
     Occasion,
     PendingRequests,
     Person,
@@ -203,6 +208,29 @@ def register(mcp: FastMCP) -> None:
         return PendingRequests(
             incoming=[_request(r) for r in (data or {}).get("incoming", [])],
             outgoing=[_request(r) for r in (data or {}).get("outgoing", [])],
+        )
+
+    @mcp.tool(annotations=READ)
+    def wishlist_list_nudge_prompts() -> list[NudgePromptSpec]:
+        """The questions a nudge can ask, and the answers each one accepts.
+
+        Call this before wishlist_send_nudge or wishlist_answer_nudge rather than
+        guessing a prompt key or an answer key. The catalogue is served by the
+        wishlist API, so it is current even when this description is not."""
+        data = api().get("/api/v1/circle/nudges/prompts")
+        return [NudgePromptSpec(**p) for p in (data or {}).get("prompts", [])]
+
+    @mcp.tool(annotations=READ)
+    def wishlist_list_nudges() -> Nudges:
+        """Nudges waiting on you, and nudges you are waiting on.
+
+        incoming is yours to settle with wishlist_answer_nudge or
+        wishlist_dismiss_nudge. outgoing carries the answers to questions you
+        asked. Both carry the nudge id those tools need."""
+        data = api().get("/api/v1/circle/nudges")
+        return Nudges(
+            incoming=[_nudge(n) for n in (data or {}).get("incoming", [])],
+            outgoing=[_nudge(n) for n in (data or {}).get("outgoing", [])],
         )
 
     @mcp.tool(annotations=READ)
@@ -461,6 +489,55 @@ def register(mcp: FastMCP) -> None:
         client.delete(f"/api/v1/circle/members/{user_id}")
         return RemovedMember(removed=True, username=username)
 
+    @mcp.tool(annotations=WRITE)
+    def wishlist_send_nudge(
+        username: str,
+        prompt: NudgePrompt,
+        item_id: int | None = None,
+    ) -> Nudge:
+        """Ask someone in your circle one of the catalogue questions.
+
+        This emails a real person, so read the question and the name back to the
+        user and get their confirmation before calling. It is a poke, not a
+        message: you choose a prompt key and nothing you write is delivered.
+
+        Use wishlist_list_nudge_prompts for the keys. 'item_still_wanted' needs an
+        item_id from wishlist_get_wishlist for that person; the other three refuse
+        one.
+
+        Refused for someone outside your circle, for someone who has nudges off,
+        more than once a day per person, for a week after they dismiss one, and
+        after ten in a day. Every refusal says which and when to try again: report
+        it to the user rather than retrying."""
+        payload = _present(username=username, prompt=prompt, item_id=item_id)
+        data = api().post("/api/v1/circle/nudges", payload)
+        return _nudge((data or {}).get("nudge", {}))
+
+    @mcp.tool(annotations=WRITE_IDEMPOTENT)
+    def wishlist_answer_nudge(nudge_id: int, answer: NudgeAnswer) -> Nudge:
+        """Answer a nudge somebody sent you.
+
+        The answer is the user's to give, not yours to infer: ask them which of
+        the options they want before calling. Only the answers listed on that
+        question are accepted, so read them off wishlist_list_nudges or
+        wishlist_list_nudge_prompts.
+
+        Answering 'still_current' also records that your wishlist or profile was
+        confirmed today, which everyone in your circle can see. Get nudge_id from
+        wishlist_list_nudges."""
+        data = api().post(f"/api/v1/circle/nudges/{nudge_id}/answer", {"answer": answer})
+        return _nudge((data or {}).get("nudge", {}))
+
+    @mcp.tool(annotations=WRITE_IDEMPOTENT)
+    def wishlist_dismiss_nudge(nudge_id: int) -> Nudge:
+        """Dismiss a nudge without answering it.
+
+        The sender is not told whether you dismissed it or simply have not got to
+        it, and they cannot nudge you again for seven days. Get nudge_id from
+        wishlist_list_nudges."""
+        data = api().post(f"/api/v1/circle/nudges/{nudge_id}/dismiss")
+        return _nudge((data or {}).get("nudge", {}))
+
     @mcp.tool(annotations=DESTRUCTIVE)
     def wishlist_create_invite(email: str) -> InviteOutcome:
         """Invite someone into your circle by email address.
@@ -583,6 +660,11 @@ def _my_item(data: dict | None) -> MyItem:
 def _request(data: dict) -> CircleRequest:
     keep = set(CircleRequest.model_fields)
     return CircleRequest(**{k: v for k, v in data.items() if k in keep})
+
+
+def _nudge(data: dict) -> Nudge:
+    keep = set(Nudge.model_fields)
+    return Nudge(**{k: v for k, v in (data or {}).items() if k in keep})
 
 
 def _request_outcome(data: dict | None, *, fallback_username: str) -> RequestOutcome:

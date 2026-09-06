@@ -178,6 +178,17 @@ class GiftProfile(BaseModel):
         description="ISO-8601 UTC, when they last saved their profile. Sizes and "
         "interests go stale; if this is old, say so rather than trusting it.",
     )
+    wishlist_reviewed_at: str | None = Field(
+        None,
+        description="ISO-8601 UTC, when they last edited their wishlist or "
+        "confirmed it was current. The same staleness warning applies, and this "
+        "is the one that matters when the task is buying from the list.",
+    )
+    nudges_enabled: bool = Field(
+        True,
+        description="Whether this person accepts nudges. False means "
+        "wishlist_send_nudge will refuse; say so rather than trying.",
+    )
 
 
 class MyProfile(GiftProfile):
@@ -194,8 +205,8 @@ class MyProfile(GiftProfile):
         "price_comfort, interests, allergies, dietary, address, "
         "things_i_dont_want, and already_own. 'address' covers all six address "
         "fields plus delivery_notes at once, and 'birth_date' covers birthday. "
-        "username, pronouns, avatar_url, and profile_reviewed_at have no key: they "
-        "are always public.",
+        "username, pronouns, avatar_url, profile_reviewed_at, wishlist_reviewed_at, "
+        "and nudges_enabled have no key: they are always public.",
     )
 
 
@@ -285,6 +296,101 @@ class RequestOutcome(BaseModel):
 class SettledRequest(BaseModel):
     outcome: Literal["accepted", "declined"]
     username: str = Field(description="The person who asked you.")
+
+
+NudgePrompt = Literal[
+    "list_current",
+    "item_still_wanted",
+    "sizes_current",
+    "add_ideas",
+]
+
+# Mirrors NudgeAnswer in the wishlist API's schemas/nudge.py. Repeated rather than
+# imported for the same reason the four profile enums are. Which answers belong to
+# which question is not encoded here: read it off NudgePromptSpec.answers, because
+# a wrong pairing is refused with invalid_answer.
+NudgeAnswer = Literal[
+    "still_current",
+    "needs_updating",
+    "still_want_it",
+    "already_have_it",
+    "changed_my_mind",
+    "on_it",
+    "not_right_now",
+]
+
+
+class NudgeAnswerOption(BaseModel):
+    answer: NudgeAnswer
+    label: str = Field(description="How the website words this answer.")
+
+
+class NudgePromptSpec(BaseModel):
+    """One question a nudge can ask, and the answers it accepts."""
+
+    prompt: NudgePrompt
+    question: str = Field(description="The question as the recipient reads it.")
+    summary: str = Field(description="The same question described to the sender.")
+    requires_item: bool = Field(
+        description="True means wishlist_send_nudge needs an item_id from that "
+        "person's wishlist. False means passing one is refused."
+    )
+    answers: list[NudgeAnswerOption] = Field(
+        description="The only answers wishlist_answer_nudge accepts for this "
+        "question. Anything else is refused."
+    )
+
+
+class NudgeItem(BaseModel):
+    """The wishlist item a nudge is about."""
+
+    id: int | None = Field(
+        description="Null means the owner has deleted the item since being asked, "
+        "which answers the question on its own."
+    )
+    name: str
+    url: str | None = None
+    image_url: str | None = None
+
+
+class Nudge(BaseModel):
+    """One short question between two people in the same circle."""
+
+    id: int = Field(description="Pass this to answer or dismiss.")
+    direction: Literal["incoming", "outgoing"] = Field(
+        description="'incoming' means they asked you and it is yours to answer. "
+        "'outgoing' means you asked and are waiting."
+    )
+    status: Literal["pending", "answered", "dismissed"]
+    prompt: NudgePrompt
+    question: str = Field(
+        description="The question in words. Quote this, do not "
+        "invent a phrasing for the prompt key."
+    )
+    answer: NudgeAnswer | None = None
+    answer_label: str | None = Field(
+        None, description="The answer in words, when there is one."
+    )
+    username: str = Field(description="Always the other person, never you.")
+    display_name: str | None = None
+    item: NudgeItem | None = Field(
+        None,
+        description="Null for the questions that are about the whole list rather "
+        "than one item, and for an item you are no longer allowed to see.",
+    )
+    created_at: str = Field(description="ISO-8601 UTC.")
+    answered_at: str | None = None
+
+
+class Nudges(BaseModel):
+    incoming: list[Nudge] = Field(
+        description="Questions waiting on you. Pending only: this is a to-do list."
+    )
+    outgoing: list[Nudge] = Field(
+        description="Questions you asked. Still-waiting ones and those answered in "
+        "the last thirty days. A nudge the other person dismissed is in neither "
+        "list, and you are not told which happened."
+    )
 
 
 class InvitePreview(BaseModel):

@@ -43,8 +43,8 @@ consent screen; it only verifies what AuthKit signed.
 
 ## The tools
 
-Twenty-four, one per thing you can already do by hand in the web app. Parity is the rule:
-no agent-only privileges, and nothing the app itself cannot do.
+Twenty-nine, one per thing you can already do by hand in the web app. Parity is
+the rule: no agent-only privileges, and nothing the app itself cannot do.
 
 | Tool | Kind |
 |---|---|
@@ -56,6 +56,8 @@ no agent-only privileges, and nothing the app itself cannot do.
 | `wishlist_get_my_wishlist` | read |
 | `wishlist_list_circle` | read |
 | `wishlist_list_circle_requests` | read |
+| `wishlist_list_nudge_prompts` | read |
+| `wishlist_list_nudges` | read |
 | `wishlist_preview_invite` | read |
 | `wishlist_upcoming_occasions` | read |
 | `wishlist_list_notifications` | read |
@@ -69,6 +71,9 @@ no agent-only privileges, and nothing the app itself cannot do.
 | `wishlist_accept_invite` | write |
 | `wishlist_update_reminder_preferences` | write |
 | `wishlist_mark_notifications_read` | write |
+| `wishlist_send_nudge` | write |
+| `wishlist_answer_nudge` | write |
+| `wishlist_dismiss_nudge` | write |
 | `wishlist_create_invite` | **destructive** |
 | `wishlist_delete_item` | **destructive** |
 | `wishlist_remove_circle_member` | **destructive** |
@@ -90,6 +95,25 @@ irreversible actions will ask first. Sending an invite emails a real person and 
 unsent. Accepting a request or an invite is reciprocal: the other person gains access to
 your circle-only fields as well as you gaining access to theirs. Removing a member cuts
 both ways at once, and getting back in needs a fresh request they have to accept.
+
+### Nudges
+
+A nudge is a short question between two people already in the same circle: is your
+wishlist still current, do you still want this item, are your sizes still right, could
+you add a few ideas. The wording is not the caller's. `wishlist_list_nudge_prompts`
+serves the catalogue, `wishlist_send_nudge` takes a prompt key, and nothing an agent
+writes is delivered to the recipient. That is the point: with no free-text field there
+is nothing to moderate and nothing a model can be argued into sending on someone's
+behalf.
+
+Sending one emails a real person, so confirm the question and the name first. The API
+refuses a nudge to anyone outside your circle, to anyone who has nudges off, more than
+once a day per person, for a week after they dismiss one, and after ten in a day. Each
+refusal names which and when to try again; report it rather than retrying.
+
+Answering `still_current` records that your wishlist or profile was confirmed today,
+which everyone in your circle sees on `wishlist_reviewed_at` and `profile_reviewed_at`.
+The answer is the user's to give: ask which option they want rather than inferring one.
 
 ### Two ways into a circle
 
