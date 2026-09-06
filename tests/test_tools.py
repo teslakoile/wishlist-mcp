@@ -1,4 +1,4 @@
-"""The twenty-four tools, driven through a real MCP client with the wishlist API stubbed.
+"""The twenty-nine tools, driven through a real MCP client with the wishlist API stubbed.
 
 What these check is this server's own job: shaping requests, shaping responses,
 and turning API errors into sentences a model can act on. The visibility and
@@ -69,6 +69,8 @@ async def test_every_tool_in_the_contract_is_present():
         "wishlist_get_my_wishlist",
         "wishlist_list_circle",
         "wishlist_list_circle_requests",
+        "wishlist_list_nudge_prompts",
+        "wishlist_list_nudges",
         "wishlist_preview_invite",
         "wishlist_add_item",
         "wishlist_update_item",
@@ -85,6 +87,9 @@ async def test_every_tool_in_the_contract_is_present():
         "wishlist_get_reminder_preferences",
         "wishlist_update_reminder_preferences",
         "wishlist_mark_notifications_read",
+        "wishlist_send_nudge",
+        "wishlist_answer_nudge",
+        "wishlist_dismiss_nudge",
     }
 
 
@@ -848,6 +853,259 @@ async def test_fields_the_caller_left_alone_are_never_sent(call):
     await call("wishlist_update_my_profile", {"shirt_size": "L"})
 
     assert json.loads(route.calls.last.request.content) == {"shirt_size": "L"}
+
+
+# --- nudges ------------------------------------------------------------------
+
+
+def _nudge_payload(**over):
+    base = {
+        "id": 9,
+        "direction": "incoming",
+        "status": "pending",
+        "prompt": "list_current",
+        "question": "Is your wishlist still up to date?",
+        "signed": True,
+        "answer": None,
+        "answer_label": None,
+        "user_id": 42,
+        "username": "sarah",
+        "display_name": "Sarah",
+        "item": None,
+        "created_at": "2026-09-05T10:00:00Z",
+        "answered_at": None,
+    }
+    base.update(over)
+    return base
+
+
+@respx.mock
+async def test_the_prompt_catalogue_comes_from_the_api_not_from_here(call):
+    """The wording is the API's. A key invented here is refused, and a question
+    reworded here is a different question from the one the recipient reads."""
+    respx.get(f"{API}/api/v1/circle/nudges/prompts").mock(
+        return_value=ok(
+            {
+                "prompts": [
+                    {
+                        "prompt": "item_still_wanted",
+                        "question": "Do you still want this?",
+                        "summary": "Ask about one item on their list",
+                        "requires_item": True,
+                        "answers": [
+                            {"answer": "still_want_it", "label": "Still want it"},
+                            {"answer": "already_have_it", "label": "Already have it"},
+                        ],
+                    }
+                ]
+            }
+        )
+    )
+
+    prompts = await call("wishlist_list_nudge_prompts")
+
+    assert prompts[0]["requires_item"] is True
+    assert [a["answer"] for a in prompts[0]["answers"]] == [
+        "still_want_it",
+        "already_have_it",
+    ]
+
+
+@respx.mock
+async def test_nudges_come_back_in_both_directions_without_database_keys(call):
+    respx.get(f"{API}/api/v1/circle/nudges").mock(
+        return_value=ok(
+            {
+                "incoming": [_nudge_payload()],
+                "outgoing": [
+                    _nudge_payload(
+                        id=10,
+                        direction="outgoing",
+                        status="answered",
+                        answer="still_current",
+                        answer_label="Yes, it's current",
+                        answered_at="2026-09-06T09:00:00Z",
+                    )
+                ],
+            }
+        )
+    )
+
+    nudges = await call("wishlist_list_nudges")
+
+    assert [n["id"] for n in nudges["incoming"]] == [9]
+    assert nudges["outgoing"][0]["answer_label"] == "Yes, it's current"
+    assert "user_id" not in nudges["incoming"][0], "database keys mean nothing here"
+
+
+@respx.mock
+async def test_a_list_scoped_question_sends_no_item_id(call):
+    """An explicit null is refused by the API, and inventing an id would ask about
+    the wrong thing."""
+    route = respx.post(f"{API}/api/v1/circle/nudges").mock(
+        return_value=ok({"nudge": _nudge_payload(direction="outgoing")})
+    )
+
+    await call("wishlist_send_nudge", {"username": "sarah", "prompt": "list_current"})
+
+    assert json.loads(route.calls.last.request.content) == {
+        "username": "sarah",
+        "prompt": "list_current",
+        "signed": False,
+    }
+
+
+@respx.mock
+async def test_an_item_scoped_question_carries_the_item_and_reports_it_back(call):
+    route = respx.post(f"{API}/api/v1/circle/nudges").mock(
+        return_value=ok(
+            {
+                "nudge": _nudge_payload(
+                    direction="outgoing",
+                    prompt="item_still_wanted",
+                    question="Do you still want this?",
+                    item={
+                        "id": 7,
+                        "name": "Merino socks",
+                        "url": None,
+                        "image_url": None,
+                    },
+                )
+            }
+        )
+    )
+
+    nudge = await call(
+        "wishlist_send_nudge",
+        {"username": "sarah", "prompt": "item_still_wanted", "item_id": 7},
+    )
+
+    assert json.loads(route.calls.last.request.content)["item_id"] == 7
+    assert nudge["item"]["name"] == "Merino socks"
+
+
+@respx.mock
+async def test_an_item_the_owner_deleted_reads_as_gone_rather_than_as_nothing(call):
+    """A null id is the API saying the item is gone, which answers the question.
+    Dropping the object would report the nudge as list-scoped."""
+    respx.get(f"{API}/api/v1/circle/nudges").mock(
+        return_value=ok(
+            {
+                "incoming": [],
+                "outgoing": [
+                    _nudge_payload(
+                        direction="outgoing",
+                        prompt="item_still_wanted",
+                        item={
+                            "id": None,
+                            "name": "This item was removed",
+                            "url": None,
+                            "image_url": None,
+                        },
+                    )
+                ],
+            }
+        )
+    )
+
+    nudges = await call("wishlist_list_nudges")
+
+    assert nudges["outgoing"][0]["item"]["id"] is None
+
+
+@respx.mock
+async def test_answering_and_dismissing_hit_their_own_endpoints(call):
+    answer = respx.post(f"{API}/api/v1/circle/nudges/9/answer").mock(
+        return_value=ok(
+            {
+                "nudge": _nudge_payload(
+                    status="answered",
+                    answer="still_current",
+                    answer_label="Yes, it's current",
+                )
+            }
+        )
+    )
+    dismiss = respx.post(f"{API}/api/v1/circle/nudges/11/dismiss").mock(
+        return_value=ok({"nudge": _nudge_payload(id=11, status="dismissed")})
+    )
+
+    answered = await call(
+        "wishlist_answer_nudge", {"nudge_id": 9, "answer": "still_current"}
+    )
+    dismissed = await call("wishlist_dismiss_nudge", {"nudge_id": 11})
+
+    assert json.loads(answer.calls.last.request.content) == {"answer": "still_current"}
+    assert answered["status"] == "answered"
+    assert dismissed["status"] == "dismissed"
+    assert dismiss.called
+
+
+@respx.mock
+async def test_a_quiet_period_refusal_reaches_the_model_as_a_sentence(call):
+    """The message names the wait. A bare code makes a model retry, which is the
+    behaviour the quiet period exists to stop."""
+    respx.post(f"{API}/api/v1/circle/nudges").mock(
+        return_value=err(
+            409,
+            "nudge_cooldown",
+            "You already nudged this person today. You can nudge them again in 6 hours.",
+        )
+    )
+
+    with pytest.raises(ToolError) as excinfo:
+        await call("wishlist_send_nudge", {"username": "sarah", "prompt": "list_current"})
+
+    assert "again in 6 hours" in str(excinfo.value)
+
+
+async def test_an_answer_that_belongs_to_another_question_never_leaves_here(call):
+    """The seven answer keys are one enum across four questions, so the pairing is
+    the API's to enforce. What this proves is that a key outside the enum entirely
+    is refused by the schema before a request is made."""
+    with pytest.raises(ToolError):
+        await call("wishlist_answer_nudge", {"nudge_id": 9, "answer": "maybe_next_year"})
+
+
+@respx.mock
+async def test_a_nudge_is_sent_anonymously_unless_the_user_asks_otherwise(call):
+    """The default has to survive the wire, not just the signature. Asking about
+    an item under the user's name tells the recipient who is buying it."""
+    route = respx.post(f"{API}/api/v1/circle/nudges").mock(
+        return_value=ok({"nudge": _nudge_payload(direction="outgoing", signed=False)})
+    )
+
+    await call("wishlist_send_nudge", {"username": "sarah", "prompt": "add_ideas"})
+    assert json.loads(route.calls.last.request.content)["signed"] is False
+
+    await call(
+        "wishlist_send_nudge",
+        {"username": "sarah", "prompt": "add_ideas", "signed": True},
+    )
+    assert json.loads(route.calls.last.request.content)["signed"] is True
+
+
+@respx.mock
+async def test_an_anonymous_incoming_nudge_carries_no_username(call):
+    """The server withholds it, and the tool passes the absence through rather
+    than substituting anything. A model that gets a name here would report one."""
+    respx.get(f"{API}/api/v1/circle/nudges").mock(
+        return_value=ok(
+            {
+                "incoming": [
+                    _nudge_payload(signed=False, username=None, display_name=None)
+                ],
+                "outgoing": [],
+            }
+        )
+    )
+
+    nudges = await call("wishlist_list_nudges")
+
+    assert nudges["incoming"][0]["username"] is None
+    assert nudges["incoming"][0]["signed"] is False
+    # The row the model reads must not name anyone anywhere.
+    assert "sarah" not in str(nudges["incoming"][0])
 
 
 # --- the README is part of the interface --------------------------------------
