@@ -1,4 +1,4 @@
-"""The twenty-nine wishlist tools.
+"""The thirty wishlist tools.
 
 Parity is the rule: this exposes what the authenticated user can already do by
 hand in the web app, with no agent-only privileges and nothing the app cannot do
@@ -15,6 +15,10 @@ choose a tool, and they are the only guardrail on the write tools that
 annotations do not already provide. Treat edits to them as interface changes.
 """
 
+import base64
+import binascii
+import re
+
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 from fastmcp.server.dependencies import get_http_headers
@@ -30,6 +34,7 @@ from wishlist_mcp.schemas import (
     GiftFormat,
     GiftGuide,
     GiftProfile,
+    ImagePurpose,
     Interest,
     InviteOutcome,
     InvitePreview,
@@ -55,6 +60,7 @@ from wishlist_mcp.schemas import (
     RequestOutcome,
     SettledRequest,
     UpcomingOccasions,
+    UploadedImage,
     Visibility,
 )
 
@@ -92,6 +98,11 @@ CALENDAR_DEFAULT_DAYS = 90
 CALENDAR_MAX_DAYS = 365
 NOTIFICATION_LIMIT = 50
 NOTIFICATION_MAX_LIMIT = 200
+# Decoded bytes. The API accepts 8 MB, but it fits every photo inside 1024 px
+# and re-encodes it as WebP, so a larger input only costs the calling model
+# tokens for pixels that are thrown away. Base64 is a third bigger again.
+UPLOAD_MAX_BYTES = 2 * 1024 * 1024
+DATA_URI_PREFIX = re.compile(r"^data:[^,]*;base64,", re.IGNORECASE)
 
 
 def api() -> WishlistAPI:
@@ -334,7 +345,10 @@ def register(mcp: FastMCP) -> None:
         ISO 4217 code of the shop the price came from, such as PHP for a
         Philippine shop or USD for an American one. It is required whenever a
         price is set, and it is stored as given: never convert the amount into
-        another currency. Amounts are 0 or more with at most two decimals."""
+        another currency. Amounts are 0 or more with at most two decimals.
+
+        image_url is an http or https link to a photo. For an image file, call
+        wishlist_upload_image first and pass the url it returns."""
         payload = _present(
             name=name,
             url=url,
@@ -384,7 +398,10 @@ def register(mcp: FastMCP) -> None:
         you did not pass. With none of them passed, it removes the price
         entirely. With price_max and price_currency passed, it turns the price
         into "up to price_max" by emptying price_min; likewise price_min and
-        price_currency give "from price_min"."""
+        price_currency give "from price_min".
+
+        image_url is an http or https link, or a url from wishlist_upload_image.
+        Pass an empty string to remove the photo."""
         payload = _present(
             name=name,
             url=url,
@@ -407,6 +424,38 @@ def register(mcp: FastMCP) -> None:
         if not payload:
             raise ToolError("Nothing to change. Pass at least one field besides item_id.")
         return _my_item(api().patch(f"/api/v1/wishlists/mine/items/{item_id}", payload))
+
+    @mcp.tool(annotations=WRITE)
+    def wishlist_upload_image(image_base64: str, purpose: ImagePurpose) -> UploadedImage:
+        """Store a photo and get back a link to it. Use this when the user gives
+        you an image file. If the photo is already online, skip this and pass its
+        http or https link as image_url or avatar_url directly.
+
+        image_base64 is the file's bytes in base64, with or without a
+        "data:image/...;base64," prefix. JPEG, PNG, WebP, GIF, and HEIC all work.
+        At most 2 MB before encoding. The API shrinks every photo to fit 1024 px
+        (item) or 512 px (avatar), so resize a large photo to that first rather
+        than sending pixels that will be discarded.
+
+        purpose is "item" for a wishlist item photo or "avatar" for your profile
+        photo. It sets the size and nothing else.
+
+        This saves nothing to your profile or wishlist. Pass the returned url to
+        wishlist_add_item or wishlist_update_item as image_url, or to
+        wishlist_update_my_profile as avatar_url. Uploads are rate limited."""
+        raw = _decode_image(image_base64)
+        data = api().post_file(
+            "/api/v1/media/images",
+            files={"file": ("upload", raw, "application/octet-stream")},
+            data={"purpose": purpose},
+        )
+        data = data or {}
+        return UploadedImage(
+            url=data.get("url", ""),
+            width=int(data.get("width") or 0),
+            height=int(data.get("height") or 0),
+            bytes=int(data.get("bytes") or 0),
+        )
 
     @mcp.tool(annotations=DESTRUCTIVE)
     def wishlist_delete_item(item_id: int) -> DeletedItem:
@@ -456,7 +505,10 @@ def register(mcp: FastMCP) -> None:
 
         visibility takes keys, not field names: {"address": "circle_only"} hides
         all six address fields and delivery_notes at once. Call
-        wishlist_get_my_profile to see the seventeen keys it accepts."""
+        wishlist_get_my_profile to see the seventeen keys it accepts.
+
+        avatar_url is an http or https link, or a url from wishlist_upload_image
+        with purpose "avatar". Pass an empty string to remove the photo."""
         payload = _present(
             display_name=display_name,
             bio=bio,
@@ -781,6 +833,39 @@ def _resolve_member(username: str) -> tuple[WishlistAPI, int]:
             return client, user_id
     raise ToolError(
         f"{username} is not in your circle. Use wishlist_list_circle to see who is."
+    )
+
+
+def _decode_image(value: str) -> bytes:
+    """Base64 in, bytes out, refused here if it cannot possibly be accepted.
+
+    Checked before the call so an oversized or garbled argument costs no upload
+    against the user's rate limit. Whether the bytes are really an image is the
+    API's call: it decodes every upload with Pillow and says so if it cannot.
+    """
+    text = DATA_URI_PREFIX.sub("", value.strip(), count=1)
+    text = "".join(text.split())
+    if not text:
+        raise ToolError("image_base64 is empty. Pass the photo's bytes in base64.")
+    # Four characters carry three bytes, so this bounds the decode before it runs.
+    if len(text) > (UPLOAD_MAX_BYTES + 2) // 3 * 4:
+        raise ToolError(_too_large())
+    try:
+        raw = base64.b64decode(text, validate=True)
+    except (binascii.Error, ValueError):
+        raise ToolError(
+            "image_base64 is not valid base64. Send the file's bytes encoded as "
+            "standard base64, not a file path or a link."
+        ) from None
+    if len(raw) > UPLOAD_MAX_BYTES:
+        raise ToolError(_too_large())
+    return raw
+
+
+def _too_large() -> str:
+    return (
+        f"That photo is over {UPLOAD_MAX_BYTES // (1024 * 1024)} MB. Resize it to "
+        "about 1024 px on the long side and try again."
     )
 
 
