@@ -318,12 +318,23 @@ def register(mcp: FastMCP) -> None:
         category: str | None = None,
         image_url: str | None = None,
         visibility: Visibility = "public",
+        price_min: float | None = None,
+        price_max: float | None = None,
+        price_currency: str | None = None,
     ) -> MyItem:
         """Add an item to your own wishlist. Only name is required.
 
         Use store_notes for the details that stop someone buying the wrong
         variant, such as colour, model, or which shop. Set visibility to
-        circle_only to show the item to your circle and nobody else."""
+        circle_only to show the item to your circle and nobody else.
+
+        Price is optional. A single price sets price_min and price_max
+        to the same number; a range sets both, lowest first; "up to 3000" is
+        price_max alone and "from 2000" is price_min alone. price_currency is the
+        ISO 4217 code of the shop the price came from, such as PHP for a
+        Philippine shop or USD for an American one. It is required whenever a
+        price is set, and it is stored as given: never convert the amount into
+        another currency. Amounts are 0 or more with at most two decimals."""
         payload = _present(
             name=name,
             url=url,
@@ -333,6 +344,9 @@ def register(mcp: FastMCP) -> None:
             category=category,
             image_url=image_url,
             visibility=visibility,
+            price_min=price_min,
+            price_max=price_max,
+            price_currency=price_currency,
         )
         return _my_item(api().post("/api/v1/wishlists/mine/items", payload))
 
@@ -347,9 +361,30 @@ def register(mcp: FastMCP) -> None:
         category: str | None = None,
         image_url: str | None = None,
         visibility: Visibility | None = None,
+        price_min: float | None = None,
+        price_max: float | None = None,
+        price_currency: str | None = None,
+        clear_price: bool = False,
     ) -> MyItem:
         """Change one of your own wishlist items. Omitted fields are left as they
-        are. Get item_id from wishlist_get_my_wishlist."""
+        are. Get item_id from wishlist_get_my_wishlist.
+
+        Price works as in wishlist_add_item: a single price sets price_min and
+        price_max to the same number, a range sets both, and price_currency is
+        the shop's ISO 4217 code (PHP, USD, EUR), required whenever a price is
+        set and never converted.
+
+        The new price is checked against the item as it will end up, so read the
+        current price first: sending only price_max=10 to an item whose price_min
+        is 20 is refused. When changing the price, send the currency with it.
+
+        Leaving the price fields out leaves the price as it is; passing null does
+        not clear them either. clear_price=true is how a price field is emptied:
+        it sends null for each of price_min, price_max, and price_currency that
+        you did not pass. With none of them passed, it removes the price
+        entirely. With price_max and price_currency passed, it turns the price
+        into "up to price_max" by emptying price_min; likewise price_min and
+        price_currency give "from price_min"."""
         payload = _present(
             name=name,
             url=url,
@@ -359,7 +394,16 @@ def register(mcp: FastMCP) -> None:
             category=category,
             image_url=image_url,
             visibility=visibility,
+            price_min=price_min,
+            price_max=price_max,
+            price_currency=price_currency,
         )
+        if clear_price:
+            # The one place an explicit null is sent. The caller asked for it by
+            # name, so it cannot wipe a price nobody mentioned, and it only
+            # touches the price fields the caller left out.
+            for field in ("price_min", "price_max", "price_currency"):
+                payload.setdefault(field, None)
         if not payload:
             raise ToolError("Nothing to change. Pass at least one field besides item_id.")
         return _my_item(api().patch(f"/api/v1/wishlists/mine/items/{item_id}", payload))

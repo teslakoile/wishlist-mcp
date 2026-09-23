@@ -321,6 +321,177 @@ async def test_adding_an_item_defaults_to_public(call):
 
 
 @respx.mock
+async def test_a_price_is_sent_in_the_shops_currency_and_read_back(call):
+    route = respx.post(f"{API}/api/v1/wishlists/mine/items").mock(
+        return_value=ok(
+            {
+                "id": 9,
+                "name": "Linen shirt",
+                "visibility": "public",
+                "price_min": 2695.0,
+                "price_max": 2695.0,
+                "price_currency": "PHP",
+            }
+        )
+    )
+
+    result = await call(
+        "wishlist_add_item",
+        {
+            "name": "Linen shirt",
+            "price_min": 2695,
+            "price_max": 2695,
+            "price_currency": "PHP",
+        },
+    )
+
+    sent = json.loads(route.calls.last.request.content)
+    assert (sent["price_min"], sent["price_max"], sent["price_currency"]) == (
+        2695,
+        2695,
+        "PHP",
+    )
+    assert (result["price_min"], result["price_max"], result["price_currency"]) == (
+        2695.0,
+        2695.0,
+        "PHP",
+    )
+
+
+@respx.mock
+async def test_an_item_without_a_price_sends_no_price_fields(call):
+    route = respx.post(f"{API}/api/v1/wishlists/mine/items").mock(
+        return_value=ok({"id": 9, "name": "thing", "visibility": "public"})
+    )
+
+    result = await call("wishlist_add_item", {"name": "thing"})
+
+    sent = json.loads(route.calls.last.request.content)
+    assert not {"price_min", "price_max", "price_currency"} & set(sent)
+    assert result["price_min"] is None and result["price_currency"] is None
+
+
+@respx.mock
+async def test_updating_to_a_range_sends_only_the_price(call):
+    route = respx.patch(f"{API}/api/v1/wishlists/mine/items/7").mock(
+        return_value=ok(
+            {
+                "id": 7,
+                "name": "Kettle",
+                "visibility": "public",
+                "price_min": 2000.0,
+                "price_max": 3000.5,
+                "price_currency": "PHP",
+            }
+        )
+    )
+
+    result = await call(
+        "wishlist_update_item",
+        {"item_id": 7, "price_min": 2000, "price_max": 3000.5, "price_currency": "PHP"},
+    )
+
+    assert json.loads(route.calls.last.request.content) == {
+        "price_min": 2000,
+        "price_max": 3000.5,
+        "price_currency": "PHP",
+    }
+    assert result["price_max"] == 3000.5
+
+
+@respx.mock
+async def test_clearing_the_price_sends_explicit_nulls(call):
+    """Leaving the fields out keeps the price, so clearing needs its own switch."""
+    route = respx.patch(f"{API}/api/v1/wishlists/mine/items/7").mock(
+        return_value=ok({"id": 7, "name": "Kettle", "visibility": "public"})
+    )
+
+    result = await call("wishlist_update_item", {"item_id": 7, "clear_price": True})
+
+    assert json.loads(route.calls.last.request.content) == {
+        "price_min": None,
+        "price_max": None,
+        "price_currency": None,
+    }
+    assert result["price_min"] is None
+
+
+@respx.mock
+async def test_clearing_only_the_low_end_turns_a_price_into_up_to(call):
+    route = respx.patch(f"{API}/api/v1/wishlists/mine/items/7").mock(
+        return_value=ok({"id": 7, "name": "Kettle", "visibility": "public"})
+    )
+
+    await call(
+        "wishlist_update_item",
+        {"item_id": 7, "price_max": 3000, "price_currency": "PHP", "clear_price": True},
+    )
+
+    assert json.loads(route.calls.last.request.content) == {
+        "price_min": None,
+        "price_max": 3000,
+        "price_currency": "PHP",
+    }
+
+
+@respx.mock
+async def test_a_null_price_without_clear_price_leaves_the_price_alone(call):
+    route = respx.patch(f"{API}/api/v1/wishlists/mine/items/7").mock(
+        return_value=ok({"id": 7, "name": "Kettle", "visibility": "public"})
+    )
+
+    await call(
+        "wishlist_update_item",
+        {"item_id": 7, "name": "Kettle", "price_min": None, "price_max": None},
+    )
+
+    assert json.loads(route.calls.last.request.content) == {"name": "Kettle"}
+
+
+@respx.mock
+async def test_a_price_refusal_reaches_the_model_as_a_sentence(call):
+    respx.post(f"{API}/api/v1/wishlists/mine/items").mock(
+        return_value=err(422, "invalid_price", "Pick a currency for the price.")
+    )
+
+    with pytest.raises(ToolError) as excinfo:
+        await call("wishlist_add_item", {"name": "thing", "price_min": 10})
+
+    assert "Pick a currency for the price." in str(excinfo.value)
+
+
+@respx.mock
+async def test_the_gift_guide_carries_each_items_price(call):
+    respx.get(f"{API}/api/v1/profiles/sarah").mock(
+        return_value=ok({"username": "sarah", "hidden_from_you": []})
+    )
+    respx.get(f"{API}/api/v1/wishlists/sarah").mock(
+        return_value=ok(
+            {
+                "items": [
+                    {
+                        "id": 3,
+                        "name": "headphones",
+                        "price_min": None,
+                        "price_max": 3000.0,
+                        "price_currency": "PHP",
+                    }
+                ]
+            }
+        )
+    )
+
+    guide = await call("wishlist_get_gift_guide", {"username": "sarah"})
+
+    item = guide["items"][0]
+    assert (item["price_min"], item["price_max"], item["price_currency"]) == (
+        None,
+        3000.0,
+        "PHP",
+    )
+
+
+@respx.mock
 async def test_deleting_reports_the_id_it_removed(call):
     respx.delete(f"{API}/api/v1/wishlists/mine/items/9").mock(
         return_value=httpx.Response(204)
