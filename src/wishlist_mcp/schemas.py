@@ -219,6 +219,24 @@ class Item(BaseModel):
     size: str | None = None
     category: str | None = None
     image_url: str | None = None
+    price_min: float | None = Field(
+        None,
+        description="The lowest price, in price_currency. Equal to price_max for a "
+        "single price. Null with price_max set means 'up to price_max'.",
+    )
+    price_max: float | None = Field(
+        None,
+        description="The highest price, in price_currency. Null with price_min set "
+        "means 'from price_min'. Both null means no price was given.",
+    )
+    price_currency: str | None = Field(
+        None,
+        description="ISO 4217 code of the shop the price came from, for example "
+        "PHP or USD. Never convert it: state the price in this currency, as "
+        "'₱2,695' for a single price, '₱2,000 – ₱3,000' for a range, 'Up to "
+        "₱3,000' or 'From ₱2,000'. If it differs from the user's own currency, "
+        "say so rather than guessing an exchange rate.",
+    )
 
 
 class MyItem(Item):
