@@ -41,11 +41,15 @@ class WishlistAPI:
             "content-type": "application/json",
         }
 
-    def _request(self, method: str, path: str, **kwargs) -> Any:
+    def _request(
+        self, method: str, path: str, headers: dict | None = None, **kwargs
+    ) -> Any:
         url = f"{settings.api_base_url.rstrip('/')}{path}"
         try:
             with httpx.Client(timeout=settings.api_timeout) as client:
-                response = client.request(method, url, headers=self._headers, **kwargs)
+                response = client.request(
+                    method, url, headers=headers or self._headers, **kwargs
+                )
         except httpx.HTTPError as exc:
             raise ToolError("Could not reach wishlist. Try again in a moment.") from exc
 
@@ -72,6 +76,13 @@ class WishlistAPI:
 
     def delete(self, path: str) -> Any:
         return self._request("DELETE", path)
+
+    def post_file(self, path: str, files: dict, data: dict) -> Any:
+        """A multipart POST. The JSON content-type is left off on purpose: httpx
+        writes multipart/form-data with its boundary, and the default header
+        would replace it with one the API cannot parse."""
+        headers = {"authorization": self._headers["authorization"]}
+        return self._request("POST", path, headers=headers, files=files, data=data)
 
 
 def segment(value: str) -> str:

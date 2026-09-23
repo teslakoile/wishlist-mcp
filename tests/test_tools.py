@@ -1,4 +1,4 @@
-"""The twenty-nine tools, driven through a real MCP client with the wishlist API stubbed.
+"""The thirty tools, driven through a real MCP client with the wishlist API stubbed.
 
 What these check is this server's own job: shaping requests, shaping responses,
 and turning API errors into sentences a model can act on. The visibility and
@@ -74,6 +74,7 @@ async def test_every_tool_in_the_contract_is_present():
         "wishlist_preview_invite",
         "wishlist_add_item",
         "wishlist_update_item",
+        "wishlist_upload_image",
         "wishlist_delete_item",
         "wishlist_update_my_profile",
         "wishlist_create_invite",
@@ -1277,6 +1278,131 @@ async def test_an_anonymous_incoming_nudge_carries_no_username(call):
     assert nudges["incoming"][0]["signed"] is False
     # The row the model reads must not name anyone anywhere.
     assert "sarah" not in str(nudges["incoming"][0])
+
+
+# --- photo upload ------------------------------------------------------------
+
+# The smallest valid PNG: one transparent pixel.
+PIXEL_PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+UPLOADED = {
+    "url": "https://storage.googleapis.com/wishlist-media/item/abc.webp",
+    "width": 1,
+    "height": 1,
+    "bytes": 44,
+}
+
+
+def _upload_route():
+    return respx.post(f"{API}/api/v1/media/images").mock(
+        return_value=httpx.Response(201, json={"data": UPLOADED})
+    )
+
+
+@respx.mock
+async def test_an_upload_sends_the_decoded_bytes_as_multipart(call, bearer):
+    import base64
+
+    route = _upload_route()
+
+    result = await call(
+        "wishlist_upload_image", {"image_base64": PIXEL_PNG, "purpose": "item"}
+    )
+
+    assert result == UPLOADED
+    request = route.calls.last.request
+    assert request.headers["authorization"] == bearer
+    assert request.headers["content-type"].startswith("multipart/form-data; boundary=")
+    body = request.content
+    assert base64.b64decode(PIXEL_PNG) in body
+    assert b'name="purpose"\r\n\r\nitem' in body
+
+
+@respx.mock
+async def test_a_data_uri_and_line_breaks_are_accepted(call):
+    import base64
+
+    route = _upload_route()
+    wrapped = "\n".join(PIXEL_PNG[i : i + 20] for i in range(0, len(PIXEL_PNG), 20))
+
+    await call(
+        "wishlist_upload_image",
+        {"image_base64": f"data:image/png;base64,{wrapped}", "purpose": "avatar"},
+    )
+
+    assert base64.b64decode(PIXEL_PNG) in route.calls.last.request.content
+
+
+@pytest.mark.parametrize(
+    "value,fragment",
+    [
+        ("", "is empty"),
+        ("data:image/png;base64,", "is empty"),
+        ("/Users/me/photo.jpg", "not valid base64"),
+        ("https://example.com/a.png", "not valid base64"),
+        ("A" * ((2 * 1024 * 1024 + 2) // 3 * 4 + 4), "over 2 MB"),
+    ],
+)
+@respx.mock
+async def test_an_argument_that_cannot_be_uploaded_never_reaches_the_api(
+    call, value, fragment
+):
+    """Refused here, so a garbled argument does not spend an upload from the
+    user's rate limit."""
+    route = _upload_route()
+
+    with pytest.raises(ToolError) as excinfo:
+        await call("wishlist_upload_image", {"image_base64": value, "purpose": "item"})
+
+    assert fragment in str(excinfo.value)
+    assert not route.called
+
+
+async def test_purpose_is_one_of_two_values(call):
+    with pytest.raises(ToolError):
+        await call(
+            "wishlist_upload_image", {"image_base64": PIXEL_PNG, "purpose": "banner"}
+        )
+
+
+@pytest.mark.parametrize(
+    "status,code,message",
+    [
+        (400, "invalid_image", "That file could not be read as a photo: truncated"),
+        (413, "image_too_large", "Photos must be under 8 MB."),
+        (429, "upload_limit_reached", "Upload limit reached. Try again in 60 seconds."),
+    ],
+)
+@respx.mock
+async def test_upload_errors_reach_the_model_verbatim(call, status, code, message):
+    respx.post(f"{API}/api/v1/media/images").mock(return_value=err(status, code, message))
+
+    with pytest.raises(ToolError) as excinfo:
+        await call(
+            "wishlist_upload_image", {"image_base64": PIXEL_PNG, "purpose": "item"}
+        )
+
+    assert message in str(excinfo.value)
+
+
+@respx.mock
+async def test_a_refused_photo_link_reaches_the_model_verbatim(call):
+    """The API refuses a link the web app could not draw. The model has no screen
+    to notice a blank tile on, so the reason has to arrive as words."""
+    respx.post(f"{API}/api/v1/wishlists/mine/items").mock(
+        return_value=err(
+            422,
+            "photo_url_invalid",
+            "Photo links need to start with http:// or https://.",
+        )
+    )
+
+    with pytest.raises(ToolError) as excinfo:
+        await call(
+            "wishlist_add_item",
+            {"name": "mug", "image_url": "data:image/png;base64,AAAA"},
+        )
+
+    assert "http:// or https://" in str(excinfo.value)
 
 
 # --- the README is part of the interface --------------------------------------

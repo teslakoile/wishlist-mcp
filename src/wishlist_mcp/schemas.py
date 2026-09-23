@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 
 Priority = Literal["low", "medium", "high"]
 Visibility = Literal["public", "circle_only"]
+ImagePurpose = Literal["avatar", "item"]
 InviteState = Literal["valid", "used", "expired"]
 
 # Mirrors DietaryValue, GiftFormatValue, InterestCategory, and PriceComfortValue in
@@ -430,6 +431,19 @@ class InvitePreview(BaseModel):
         description="valid means it can still be accepted. used means someone has "
         "already accepted it. expired means the window closed."
     )
+
+
+class UploadedImage(BaseModel):
+    """A stored photo. Nothing shows it until its url is saved somewhere."""
+
+    url: str = Field(
+        description="Pass this as image_url to wishlist_add_item or "
+        "wishlist_update_item, or as avatar_url to wishlist_update_my_profile. "
+        "Uploading alone changes nothing anyone can see."
+    )
+    width: int
+    height: int
+    bytes: int = Field(description="Size after the API re-encoded it as WebP.")
 
 
 class DeletedItem(BaseModel):

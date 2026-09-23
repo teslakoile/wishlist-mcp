@@ -43,7 +43,7 @@ consent screen; it only verifies what AuthKit signed.
 
 ## The tools
 
-Twenty-nine, one per thing you can already do by hand in the web app. Parity is
+Thirty, one per thing you can already do by hand in the web app. Parity is
 the rule: no agent-only privileges, and nothing the app itself cannot do.
 
 | Tool | Kind |
@@ -64,6 +64,7 @@ the rule: no agent-only privileges, and nothing the app itself cannot do.
 | `wishlist_get_reminder_preferences` | read |
 | `wishlist_add_item` | write |
 | `wishlist_update_item` | write |
+| `wishlist_upload_image` | write |
 | `wishlist_update_my_profile` | write |
 | `wishlist_request_circle` | write |
 | `wishlist_accept_circle_request` | write |
@@ -95,6 +96,21 @@ irreversible actions will ask first. Sending an invite emails a real person and 
 unsent. Accepting a request or an invite is reciprocal: the other person gains access to
 your circle-only fields as well as you gaining access to theirs. Removing a member cuts
 both ways at once, and getting back in needs a fresh request they have to accept.
+
+### Photos
+
+`wishlist_upload_image` takes a photo as base64 and returns the link the API stored it
+under. It saves nothing on its own: the model passes that link to `wishlist_add_item`,
+`wishlist_update_item`, or `wishlist_update_my_profile`, which is the same two steps the
+web app's photo picker takes. Photos already online skip the upload and go in as
+`image_url` or `avatar_url` directly; the API refuses anything but an http or https link.
+
+The tool refuses more than 2 MB before it calls the API, a quarter of what the API
+accepts. The API fits every photo inside 1024 px and re-encodes it as WebP, so a
+larger input spends the calling model's tokens on pixels that are thrown away.
+
+There is deliberately no tool that takes a link and stores a copy. That would have the
+API fetch whatever URL a model read in someone else's item notes.
 
 ### Nudges
 
