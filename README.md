@@ -1,7 +1,7 @@
 # wishlist-mcp
 
-The hosted MCP server for [wishlist.fit](https://app.wishlist.fit). It lets Claude,
-ChatGPT, or Codex read and update your wishlist on your behalf.
+The hosted MCP server for [wishlist.fit](https://app.wishlist.fit): gift giving without the
+guesswork. It lets Claude, ChatGPT, or Codex read and update your wishlist for you.
 
 ```
 https://mcp.wishlist.fit/mcp
