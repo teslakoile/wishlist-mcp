@@ -11,6 +11,12 @@ class Settings(BaseSettings):
     api_base_url: str = "http://localhost:8000"
     api_timeout: float = 15.0
 
+    # One usage event per tool call, posted to the API after the tool finishes
+    # (see usage.py). The timeout is how long a slow API may hold up a result
+    # that is already computed, so it is short.
+    report_usage: bool = True
+    usage_timeout: float = 2.0
+
     authkit_domain: str = ""
     # Every access token must carry exactly this as its audience, per RFC 8707,
     # and the protected resource metadata must echo it character for character.

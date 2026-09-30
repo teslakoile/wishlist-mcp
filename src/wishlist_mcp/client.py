@@ -13,6 +13,7 @@ import httpx
 from fastmcp.exceptions import ToolError
 
 from wishlist_mcp.config import settings
+from wishlist_mcp.usage import note_failure
 
 # Messages a model can act on, keyed by the API's error codes. Anything not
 # listed falls back to the API's own message, which is already written for a
@@ -51,6 +52,7 @@ class WishlistAPI:
                     method, url, headers=headers or self._headers, **kwargs
                 )
         except httpx.HTTPError as exc:
+            note_failure("unreachable")
             raise ToolError("Could not reach wishlist. Try again in a moment.") from exc
 
         if response.status_code == 204:
@@ -62,6 +64,8 @@ class WishlistAPI:
             body = {}
 
         if response.status_code >= 400:
+            code = (body.get("error") or {}).get("code")
+            note_failure(code or f"http_{response.status_code}")
             raise ToolError(_message_for(response.status_code, body))
         return body.get("data")
 
