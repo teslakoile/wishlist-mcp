@@ -4,6 +4,7 @@ from fastmcp import FastMCP
 
 from wishlist_mcp.config import settings
 from wishlist_mcp.tools import register
+from wishlist_mcp.usage import UsageReporter
 
 INSTRUCTIONS = """\
 wishlist keeps gift-ready profiles and wishlists, shared with an approved circle.
@@ -36,6 +37,7 @@ def build_server() -> FastMCP:
         website_url="https://app.wishlist.fit",
     )
     register(server)
+    server.add_middleware(UsageReporter())
     return server
 
 

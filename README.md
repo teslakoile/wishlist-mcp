@@ -200,10 +200,21 @@ Every variable is prefixed `WISHLIST_MCP_`. See `.env.example`.
 | `RESOURCE_URI` | Canonical URI. Every token's audience must match it exactly |
 | `HOST` | The server 404s on any other host |
 | `API_TIMEOUT` | Seconds to wait on the API |
+| `REPORT_USAGE` | Send one usage event per tool call to the API. Default `true` |
+| `USAGE_TIMEOUT` | Seconds a slow API may delay a finished result while the event is sent. Default `2` |
 
 `RESOURCE_URI` must match the resource indicator configured in WorkOS **character for
 character**, including the `/mcp` path. A mismatch is the most common reason a client
 refuses to connect.
+
+## Usage counts
+
+After each tool call the server posts one event to the API's `POST /api/v1/events`,
+with the caller's own token: the tool's name, whether it worked, the API's error code
+if it did not, and how long it took. It never sends an argument or a result, and the
+API drops any other field. The counts feed the app's own improvement planning, which
+otherwise sees the web app's numbers and nothing for this server. `usage.py` has the
+reasoning, and a failure to report can never fail a tool.
 
 ## Things worth knowing before you change this
 
