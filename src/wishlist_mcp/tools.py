@@ -322,6 +322,7 @@ def register(mcp: FastMCP) -> None:
     @mcp.tool(annotations=WRITE)
     def wishlist_add_item(
         name: str,
+        link: str | None = None,
         url: str | None = None,
         store_notes: str | None = None,
         priority: Priority | None = None,
@@ -334,6 +335,13 @@ def register(mcp: FastMCP) -> None:
         price_currency: str | None = None,
     ) -> MyItem:
         """Add an item to your own wishlist. Only name is required.
+
+        Pass link to read a shop page before saving: it fills in url (if url is
+        not also given), image_url, and -- only when price_currency is also
+        given -- price_min and price_max, with whatever that page's name,
+        photo, and price turn out to be. A field you pass explicitly always
+        wins over what the page says. The page may have nothing to read; that
+        is not an error, it just leaves those fields as you set them.
 
         Use store_notes for the details that stop someone buying the wrong
         variant, such as colour, model, or which shop. Set visibility to
@@ -349,6 +357,20 @@ def register(mcp: FastMCP) -> None:
 
         image_url is an http or https link to a photo. For an image file, call
         wishlist_upload_image first and pass the url it returns."""
+        if link:
+            preview = (
+                api().post("/api/v1/wishlists/mine/items/link-preview", {"url": link})
+                or {}
+            )
+            url = url or link
+            image_url = image_url or preview.get("image_url")
+            if (
+                price_min is None
+                and price_max is None
+                and price_currency
+                and preview.get("price") is not None
+            ):
+                price_min = price_max = preview["price"]
         payload = _present(
             name=name,
             url=url,
