@@ -373,6 +373,84 @@ async def test_an_item_without_a_price_sends_no_price_fields(call):
 
 
 @respx.mock
+async def test_a_link_fills_in_url_and_image_from_the_preview(call):
+    respx.post(f"{API}/api/v1/wishlists/mine/items/link-preview").mock(
+        return_value=ok(
+            {
+                "name": "Kettle",
+                "image_url": "https://cdn.wishlist.fit/items/a.webp",
+                "price": 49.99,
+            }
+        )
+    )
+    route = respx.post(f"{API}/api/v1/wishlists/mine/items").mock(
+        return_value=ok({"id": 9, "name": "thing", "visibility": "public"})
+    )
+
+    await call(
+        "wishlist_add_item", {"name": "thing", "link": "https://shop.example/kettle"}
+    )
+
+    sent = json.loads(route.calls.last.request.content)
+    assert sent["url"] == "https://shop.example/kettle"
+    assert sent["image_url"] == "https://cdn.wishlist.fit/items/a.webp"
+    # No currency was given, so the preview's price is left out rather than guessed.
+    assert "price_min" not in sent and "price_max" not in sent
+
+
+@respx.mock
+async def test_an_explicit_field_wins_over_the_link_preview(call):
+    respx.post(f"{API}/api/v1/wishlists/mine/items/link-preview").mock(
+        return_value=ok(
+            {
+                "name": "Kettle",
+                "image_url": "https://cdn.wishlist.fit/items/a.webp",
+                "price": 49.99,
+            }
+        )
+    )
+    route = respx.post(f"{API}/api/v1/wishlists/mine/items").mock(
+        return_value=ok({"id": 9, "name": "thing", "visibility": "public"})
+    )
+
+    await call(
+        "wishlist_add_item",
+        {
+            "name": "thing",
+            "link": "https://shop.example/kettle",
+            "url": "https://shop.example/kettle?ref=mine",
+            "image_url": "https://cdn.wishlist.fit/items/mine.webp",
+        },
+    )
+
+    sent = json.loads(route.calls.last.request.content)
+    assert sent["url"] == "https://shop.example/kettle?ref=mine"
+    assert sent["image_url"] == "https://cdn.wishlist.fit/items/mine.webp"
+
+
+@respx.mock
+async def test_a_link_fills_price_only_when_currency_is_given(call):
+    respx.post(f"{API}/api/v1/wishlists/mine/items/link-preview").mock(
+        return_value=ok({"name": "Kettle", "image_url": None, "price": 49.99})
+    )
+    route = respx.post(f"{API}/api/v1/wishlists/mine/items").mock(
+        return_value=ok({"id": 9, "name": "thing", "visibility": "public"})
+    )
+
+    await call(
+        "wishlist_add_item",
+        {"name": "thing", "link": "https://shop.example/kettle", "price_currency": "USD"},
+    )
+
+    sent = json.loads(route.calls.last.request.content)
+    assert (sent["price_min"], sent["price_max"], sent["price_currency"]) == (
+        49.99,
+        49.99,
+        "USD",
+    )
+
+
+@respx.mock
 async def test_updating_to_a_range_sends_only_the_price(call):
     route = respx.patch(f"{API}/api/v1/wishlists/mine/items/7").mock(
         return_value=ok(
