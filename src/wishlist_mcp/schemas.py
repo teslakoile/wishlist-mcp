@@ -234,6 +234,11 @@ class Item(BaseModel):
     brand: str | None = Field(None, description="The brand of this item.")
     category: str | None = None
     image_url: str | None = None
+    extra_image_urls: list[str] = Field(
+        default_factory=list,
+        description="More photo links after the cover image_url, in the order the "
+        "owner put them. Empty when the item has only a cover. At most 4.",
+    )
     price_min: float | None = Field(
         None,
         description="The lowest price, in price_currency. Equal to price_max for a "
@@ -464,8 +469,9 @@ class UploadedImage(BaseModel):
     """A stored photo. Nothing shows it until its url is saved somewhere."""
 
     url: str = Field(
-        description="Pass this as image_url to wishlist_add_item or "
-        "wishlist_update_item, or as avatar_url to wishlist_update_my_profile. "
+        description="Pass this as image_url (the cover) or in extra_image_urls "
+        "(more photos) to wishlist_add_item or wishlist_update_item, or as "
+        "avatar_url to wishlist_update_my_profile. "
         "Uploading alone changes nothing anyone can see."
     )
     width: int

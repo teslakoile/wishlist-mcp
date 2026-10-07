@@ -95,6 +95,13 @@ number onto the item; `size` stays as the fallback and is not cleared by it.
 `wishlist_update_item` removes a `size_source` with `clear_size_source=true`, and a
 `color` or `brand` with an empty string. `color` and `brand` are at most 64 characters.
 
+An item has a cover photo, `image_url`, and up to four more in `extra_image_urls`. Every
+item read carries the list, `[]` when there are none. `wishlist_add_item` and
+`wishlist_update_item` take `extra_image_urls` as a list of http or https links, usually
+the links `wishlist_upload_image` returned. On update the list replaces all the extras,
+`[]` removes them, and leaving it out changes nothing. More than four is refused before
+the API is called.
+
 `wishlist_upcoming_occasions` answers "whose birthday is next" in one call, and pairs
 with the gift guide: it hands back a username and a date, and the guide turns that into
 something to buy. Birthdays in it are only people whose circle the caller is in, and
@@ -112,8 +119,9 @@ both ways at once, and getting back in needs a fresh request they have to accept
 `wishlist_upload_image` takes a photo as base64 and returns the link the API stored it
 under. It saves nothing on its own: the model passes that link to `wishlist_add_item`,
 `wishlist_update_item`, or `wishlist_update_my_profile`, which is the same two steps the
-web app's photo picker takes. Photos already online skip the upload and go in as
-`image_url` or `avatar_url` directly; the API refuses anything but an http or https link.
+web app's photo picker takes. On an item the link is the cover (`image_url`) or one of the
+`extra_image_urls`. Photos already online skip the upload and go in as
+`image_url`, `extra_image_urls`, or `avatar_url` directly; the API refuses anything but an http or https link.
 
 The tool refuses more than 2 MB before it calls the API, a quarter of what the API
 accepts. The API fits every photo inside 1024 px and re-encodes it as WebP, so a

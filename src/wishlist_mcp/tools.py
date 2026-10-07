@@ -191,7 +191,10 @@ def register(mcp: FastMCP) -> None:
 
         Items carry the raw size and size_source. size_source tells you which
         profile size applies; this tool has no profile in hand, so it does not
-        resolve it. The gift guide resolves it."""
+        resolve it. The gift guide resolves it.
+
+        Items carry image_url (the cover photo) and extra_image_urls (more
+        photos, empty when there are none)."""
         data = api().get(f"/api/v1/wishlists/{segment(username)}")
         return [_item(i) for i in (data or {}).get("items", [])]
 
@@ -209,7 +212,10 @@ def register(mcp: FastMCP) -> None:
 
         Items carry the raw size and size_source. size_source tells you which
         of your profile sizes applies; this tool does not resolve it, and the
-        gift guide does that for other people's items."""
+        gift guide does that for other people's items.
+
+        Items carry image_url (the cover photo) and extra_image_urls (more
+        photos, empty when there are none)."""
         data = api().get("/api/v1/wishlists/mine")
         return [_my_item(i) for i in (data or {}).get("items", [])]
 
@@ -350,6 +356,7 @@ def register(mcp: FastMCP) -> None:
         brand: str | None = None,
         category: str | None = None,
         image_url: str | None = None,
+        extra_image_urls: list[str] | None = None,
         visibility: Visibility = "public",
         price_min: float | None = None,
         price_max: float | None = None,
@@ -386,8 +393,13 @@ def register(mcp: FastMCP) -> None:
         price is set, and it is stored as given: never convert the amount into
         another currency. Amounts are 0 or more with at most two decimals.
 
-        image_url is an http or https link to a photo. For an image file, call
-        wishlist_upload_image first and pass the url it returns."""
+        image_url is an http or https link to the cover photo. For an image file,
+        call wishlist_upload_image first and pass the url it returns.
+
+        extra_image_urls adds more photos after the cover: at most 4 (5 photos
+        with the cover), each an http or https link, usually the url
+        wishlist_upload_image returned. The cover stays image_url."""
+        _check_extra_photos(extra_image_urls)
         if link:
             preview = (
                 api().post("/api/v1/wishlists/mine/items/link-preview", {"url": link})
@@ -413,6 +425,7 @@ def register(mcp: FastMCP) -> None:
             brand=brand,
             category=category,
             image_url=image_url,
+            extra_image_urls=extra_image_urls,
             visibility=visibility,
             price_min=price_min,
             price_max=price_max,
@@ -433,6 +446,7 @@ def register(mcp: FastMCP) -> None:
         brand: str | None = None,
         category: str | None = None,
         image_url: str | None = None,
+        extra_image_urls: list[str] | None = None,
         visibility: Visibility | None = None,
         price_min: float | None = None,
         price_max: float | None = None,
@@ -466,7 +480,15 @@ def register(mcp: FastMCP) -> None:
         price_currency give "from price_min".
 
         image_url is an http or https link, or a url from wishlist_upload_image.
-        Pass an empty string to remove the photo."""
+        Pass an empty string to remove the photo.
+
+        extra_image_urls is the list of more photos after the cover: at most 4,
+        each an http or https link, usually a url from wishlist_upload_image.
+        Passing it replaces all the extra photos, so send the whole list you want
+        to end up with, read from wishlist_get_my_wishlist first. An empty list
+        removes them all. Leaving it out leaves them as they are. The cover
+        stays image_url."""
+        _check_extra_photos(extra_image_urls)
         payload = _present(
             name=name,
             url=url,
@@ -478,6 +500,7 @@ def register(mcp: FastMCP) -> None:
             brand=brand,
             category=category,
             image_url=image_url,
+            extra_image_urls=extra_image_urls,
             visibility=visibility,
             price_min=price_min,
             price_max=price_max,
@@ -516,8 +539,9 @@ def register(mcp: FastMCP) -> None:
         photo. It sets the size and nothing else.
 
         This saves nothing to your profile or wishlist. Pass the returned url to
-        wishlist_add_item or wishlist_update_item as image_url, or to
-        wishlist_update_my_profile as avatar_url. Uploads are rate limited."""
+        wishlist_add_item or wishlist_update_item as image_url (the cover) or
+        in extra_image_urls (more photos), or to wishlist_update_my_profile as
+        avatar_url. Uploads are rate limited."""
         raw = _decode_image(image_base64)
         data = api().post_file(
             "/api/v1/media/images",
@@ -975,6 +999,19 @@ def _present(**kwargs) -> dict:
     dietary and interests it means "nothing applies", which is an answer.
     """
     return {k: v for k, v in kwargs.items() if v is not None}
+
+
+MAX_EXTRA_PHOTOS = 4
+
+
+def _check_extra_photos(urls: list[str] | None) -> None:
+    """The API refuses a fifth extra photo too. Saying so here costs no round trip
+    and the model gets the same sentence either way."""
+    if urls is not None and len(urls) > MAX_EXTRA_PHOTOS:
+        raise ToolError(
+            f"At most {MAX_EXTRA_PHOTOS} extra photos; you passed {len(urls)}. "
+            "Keep the best ones and send those."
+        )
 
 
 def _tags(interests: list[Interest] | None) -> list[dict] | None:

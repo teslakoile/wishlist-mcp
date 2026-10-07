@@ -662,6 +662,165 @@ async def test_a_size_source_that_is_not_a_profile_size_never_reaches_the_api(
     assert not add.called and not patch_.called
 
 
+# --- extra photos -------------------------------------------------------------
+
+EXTRA = [
+    "https://cdn.wishlist.fit/items/b.webp",
+    "https://cdn.wishlist.fit/items/c.webp",
+]
+
+
+@respx.mock
+async def test_adding_an_item_sends_extra_photos_only_when_given(call):
+    route = respx.post(f"{API}/api/v1/wishlists/mine/items").mock(
+        return_value=ok(
+            {
+                "id": 9,
+                "name": "Lamp",
+                "visibility": "public",
+                "image_url": "https://cdn.wishlist.fit/items/a.webp",
+                "extra_image_urls": EXTRA,
+            }
+        )
+    )
+
+    result = await call(
+        "wishlist_add_item",
+        {
+            "name": "Lamp",
+            "image_url": "https://cdn.wishlist.fit/items/a.webp",
+            "extra_image_urls": EXTRA,
+        },
+    )
+
+    sent = json.loads(route.calls.last.request.content)
+    assert sent["extra_image_urls"] == EXTRA
+    assert sent["image_url"] == "https://cdn.wishlist.fit/items/a.webp"
+    assert result["extra_image_urls"] == EXTRA
+
+    await call("wishlist_add_item", {"name": "Kettle"})
+
+    assert "extra_image_urls" not in json.loads(route.calls.last.request.content)
+
+
+@respx.mock
+async def test_updating_an_item_sends_extra_photos_only_when_given(call):
+    route = respx.patch(f"{API}/api/v1/wishlists/mine/items/7").mock(
+        return_value=ok({"id": 7, "name": "Lamp", "visibility": "public"})
+    )
+
+    await call("wishlist_update_item", {"item_id": 7, "name": "Lamp"})
+    assert json.loads(route.calls.last.request.content) == {"name": "Lamp"}
+
+    await call(
+        "wishlist_update_item",
+        {"item_id": 7, "name": "Lamp", "extra_image_urls": None},
+    )
+    assert json.loads(route.calls.last.request.content) == {"name": "Lamp"}
+
+
+@respx.mock
+async def test_a_list_of_extra_photos_replaces_the_whole_list(call):
+    route = respx.patch(f"{API}/api/v1/wishlists/mine/items/7").mock(
+        return_value=ok(
+            {
+                "id": 7,
+                "name": "Lamp",
+                "visibility": "public",
+                "extra_image_urls": EXTRA,
+            }
+        )
+    )
+
+    result = await call("wishlist_update_item", {"item_id": 7, "extra_image_urls": EXTRA})
+
+    assert json.loads(route.calls.last.request.content) == {"extra_image_urls": EXTRA}
+    assert result["extra_image_urls"] == EXTRA
+
+
+@respx.mock
+async def test_an_empty_list_clears_the_extra_photos(call):
+    route = respx.patch(f"{API}/api/v1/wishlists/mine/items/7").mock(
+        return_value=ok({"id": 7, "name": "Lamp", "visibility": "public"})
+    )
+
+    result = await call("wishlist_update_item", {"item_id": 7, "extra_image_urls": []})
+
+    assert json.loads(route.calls.last.request.content) == {"extra_image_urls": []}
+    assert result["extra_image_urls"] == []
+
+
+@pytest.mark.parametrize(
+    "tool,arguments",
+    [
+        ("wishlist_add_item", {"name": "Lamp"}),
+        ("wishlist_update_item", {"item_id": 7}),
+    ],
+)
+@respx.mock
+async def test_more_than_four_extra_photos_never_reach_the_api(call, tool, arguments):
+    add = respx.post(f"{API}/api/v1/wishlists/mine/items")
+    patch_ = respx.patch(f"{API}/api/v1/wishlists/mine/items/7")
+    preview = respx.post(f"{API}/api/v1/wishlists/mine/items/link-preview")
+    five = [f"https://cdn.wishlist.fit/items/{n}.webp" for n in range(5)]
+
+    with pytest.raises(ToolError) as excinfo:
+        await call(tool, {**arguments, "extra_image_urls": five})
+
+    assert "At most 4 extra photos" in str(excinfo.value)
+    assert not add.called and not patch_.called and not preview.called
+
+
+@respx.mock
+async def test_four_extra_photos_are_allowed(call):
+    route = respx.post(f"{API}/api/v1/wishlists/mine/items").mock(
+        return_value=ok({"id": 1, "name": "Lamp", "visibility": "public"})
+    )
+    four = [f"https://cdn.wishlist.fit/items/{n}.webp" for n in range(4)]
+
+    await call("wishlist_add_item", {"name": "Lamp", "extra_image_urls": four})
+
+    assert json.loads(route.calls.last.request.content)["extra_image_urls"] == four
+
+
+@respx.mock
+async def test_every_read_exposes_extra_photos_and_defaults_to_an_empty_list(call):
+    respx.get(f"{API}/api/v1/wishlists/sarah").mock(
+        return_value=ok(
+            {
+                "items": [
+                    {"id": 1, "name": "Lamp", "extra_image_urls": EXTRA},
+                    {"id": 2, "name": "Mug"},
+                ]
+            }
+        )
+    )
+    respx.get(f"{API}/api/v1/wishlists/mine").mock(
+        return_value=ok(
+            {
+                "items": [
+                    {
+                        "id": 1,
+                        "name": "Lamp",
+                        "visibility": "public",
+                        "extra_image_urls": EXTRA,
+                    },
+                    {"id": 2, "name": "Mug", "visibility": "public"},
+                ]
+            }
+        )
+    )
+    respx.get(f"{API}/api/v1/profiles/sarah").mock(return_value=ok({"username": "sarah"}))
+
+    theirs = await call("wishlist_get_wishlist", {"username": "sarah"})
+    mine = await call("wishlist_get_my_wishlist")
+    guide = await call("wishlist_get_gift_guide", {"username": "sarah"})
+
+    assert [i["extra_image_urls"] for i in theirs] == [EXTRA, []]
+    assert [i["extra_image_urls"] for i in mine] == [EXTRA, []]
+    assert [i["extra_image_urls"] for i in guide["items"]] == [EXTRA, []]
+
+
 def _guide_profile(**sizes):
     return ok({"username": "sarah", "hidden_from_you": [], **sizes})
 
