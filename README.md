@@ -83,7 +83,17 @@ the rule: no agent-only privileges, and nothing the app itself cannot do.
 reason anyone connects this server, and without it the gift-giver journey costs three
 round trips. It carries the fields that actually rule a gift in or out: dietary rules
 and allergies, interests, price comfort, what they already own, and their birthday
-without the year.
+without the year. Each item in it also carries `effective_size`, the size to buy: the
+person's profile size when the item's `size_source` (`shirt`, `shoe`, `pants`, or `ring`)
+points at one the profile shows you, otherwise the item's own `size`. The raw `size` and
+`size_source` stay on the item. `wishlist_get_wishlist` and `wishlist_get_my_wishlist`
+have no profile in hand, so they return the raw fields only.
+
+`wishlist_add_item` and `wishlist_update_item` take `size`, `size_source`, `color`, and
+`brand`. `size_source` means "use my profile size of that kind" and never copies a
+number onto the item; `size` stays as the fallback and is not cleared by it.
+`wishlist_update_item` removes a `size_source` with `clear_size_source=true`, and a
+`color` or `brand` with an empty string. `color` and `brand` are at most 64 characters.
 
 `wishlist_upcoming_occasions` answers "whose birthday is next" in one call, and pairs
 with the gift guide: it hands back a username and a date, and the guide turns that into
@@ -181,7 +191,8 @@ detects that.
 `GiftProfile` and `MyProfile` in `schemas.py` list readable fields explicitly, and
 `wishlist_update_my_profile` lists writable ones as arguments, so a new column stops at
 this boundary until someone moves it. The `Dietary`, `GiftFormat`, `PriceComfort`, and
-`InterestCategory` literals are copies of the API's enums for the same reason.
+`InterestCategory` literals are copies of the API's enums for the same reason, and so is
+`SizeSource`, which has to name the same four profile sizes as the item's `size_source`.
 
 Watch for a second failure mode that does not look like a gap: a tool reads one key out
 of a response body, and an endpoint that starts answering with a second shape makes it

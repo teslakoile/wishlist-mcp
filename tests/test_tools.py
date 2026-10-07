@@ -540,6 +540,235 @@ async def test_a_price_refusal_reaches_the_model_as_a_sentence(call):
 
 
 @respx.mock
+async def test_adding_an_item_sends_color_brand_and_size_source_only_when_given(call):
+    route = respx.post(f"{API}/api/v1/wishlists/mine/items").mock(
+        return_value=ok(
+            {
+                "id": 9,
+                "name": "Linen shirt",
+                "visibility": "public",
+                "color": "Sage",
+                "brand": "Uniqlo",
+                "size_source": "shirt",
+            }
+        )
+    )
+
+    result = await call(
+        "wishlist_add_item",
+        {
+            "name": "Linen shirt",
+            "color": "Sage",
+            "brand": "Uniqlo",
+            "size_source": "shirt",
+        },
+    )
+
+    sent = json.loads(route.calls.last.request.content)
+    assert (sent["color"], sent["brand"], sent["size_source"]) == (
+        "Sage",
+        "Uniqlo",
+        "shirt",
+    )
+    assert (result["color"], result["brand"], result["size_source"]) == (
+        "Sage",
+        "Uniqlo",
+        "shirt",
+    )
+
+    await call("wishlist_add_item", {"name": "Kettle"})
+
+    assert not {"color", "brand", "size_source"} & set(
+        json.loads(route.calls.last.request.content)
+    )
+
+
+@respx.mock
+async def test_updating_an_item_sends_only_the_new_fields_it_was_given(call):
+    route = respx.patch(f"{API}/api/v1/wishlists/mine/items/7").mock(
+        return_value=ok({"id": 7, "name": "Boots", "visibility": "public"})
+    )
+
+    await call("wishlist_update_item", {"item_id": 7, "brand": "Blundstone"})
+    assert json.loads(route.calls.last.request.content) == {"brand": "Blundstone"}
+
+    await call("wishlist_update_item", {"item_id": 7, "size_source": "shoe"})
+    assert json.loads(route.calls.last.request.content) == {"size_source": "shoe"}
+
+
+@respx.mock
+async def test_a_color_or_brand_is_cleared_with_an_empty_string(call):
+    route = respx.patch(f"{API}/api/v1/wishlists/mine/items/7").mock(
+        return_value=ok({"id": 7, "name": "Boots", "visibility": "public"})
+    )
+
+    await call("wishlist_update_item", {"item_id": 7, "color": "", "brand": ""})
+
+    assert json.loads(route.calls.last.request.content) == {"color": "", "brand": ""}
+
+
+@respx.mock
+async def test_clearing_the_size_source_sends_an_explicit_null(call):
+    route = respx.patch(f"{API}/api/v1/wishlists/mine/items/7").mock(
+        return_value=ok({"id": 7, "name": "Boots", "visibility": "public"})
+    )
+
+    await call("wishlist_update_item", {"item_id": 7, "clear_size_source": True})
+
+    assert json.loads(route.calls.last.request.content) == {"size_source": None}
+
+
+@respx.mock
+async def test_a_null_size_source_without_the_clear_flag_leaves_it_alone(call):
+    route = respx.patch(f"{API}/api/v1/wishlists/mine/items/7").mock(
+        return_value=ok({"id": 7, "name": "Boots", "visibility": "public"})
+    )
+
+    await call(
+        "wishlist_update_item", {"item_id": 7, "name": "Boots", "size_source": None}
+    )
+
+    assert json.loads(route.calls.last.request.content) == {"name": "Boots"}
+
+
+async def test_setting_and_clearing_the_size_source_together_is_refused(call):
+    with pytest.raises(ToolError) as excinfo:
+        await call(
+            "wishlist_update_item",
+            {"item_id": 7, "size_source": "shoe", "clear_size_source": True},
+        )
+
+    assert "not both" in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    "tool,arguments",
+    [
+        ("wishlist_add_item", {"name": "Hat"}),
+        ("wishlist_update_item", {"item_id": 7}),
+    ],
+)
+@respx.mock
+async def test_a_size_source_that_is_not_a_profile_size_never_reaches_the_api(
+    call, tool, arguments
+):
+    add = respx.post(f"{API}/api/v1/wishlists/mine/items")
+    patch_ = respx.patch(f"{API}/api/v1/wishlists/mine/items/7")
+
+    with pytest.raises(ToolError) as excinfo:
+        await call(tool, {**arguments, "size_source": "hat"})
+
+    assert "size_source" in str(excinfo.value)
+    assert not add.called and not patch_.called
+
+
+def _guide_profile(**sizes):
+    return ok({"username": "sarah", "hidden_from_you": [], **sizes})
+
+
+@respx.mock
+async def test_the_gift_guide_resolves_a_size_source_against_the_profile(call):
+    respx.get(f"{API}/api/v1/profiles/sarah").mock(
+        return_value=_guide_profile(shirt_size="M", shoe_size="US 8")
+    )
+    respx.get(f"{API}/api/v1/wishlists/sarah").mock(
+        return_value=ok(
+            {
+                "items": [
+                    {
+                        "id": 1,
+                        "name": "Tee",
+                        "size": "L",
+                        "size_source": "shirt",
+                        "color": "Sage",
+                        "brand": "Uniqlo",
+                    },
+                    {"id": 2, "name": "Boots", "size_source": "shoe"},
+                ]
+            }
+        )
+    )
+
+    guide = await call("wishlist_get_gift_guide", {"username": "sarah"})
+
+    tee, boots = guide["items"]
+    assert tee["effective_size"] == "M", "the profile wins over the item's own text"
+    assert tee["size"] == "L" and tee["size_source"] == "shirt"
+    assert (tee["color"], tee["brand"]) == ("Sage", "Uniqlo")
+    assert boots["effective_size"] == "US 8"
+    assert boots["size_source"] == "shoe"
+
+
+@respx.mock
+async def test_the_gift_guide_falls_back_to_the_items_size(call):
+    respx.get(f"{API}/api/v1/profiles/sarah").mock(
+        return_value=ok(
+            {
+                "username": "sarah",
+                "hidden_from_you": ["shirt_size"],
+                "shirt_size": None,
+                "shoe_size": "",
+                "pants_size": "32",
+            }
+        )
+    )
+    respx.get(f"{API}/api/v1/wishlists/sarah").mock(
+        return_value=ok(
+            {
+                "items": [
+                    # The profile hides the size from this viewer.
+                    {"id": 1, "name": "Tee", "size": "L", "size_source": "shirt"},
+                    # The profile value is an empty string.
+                    {"id": 2, "name": "Boots", "size": "9", "size_source": "shoe"},
+                    # No size_source: the item's own text stands.
+                    {"id": 3, "name": "Jeans", "size": "34"},
+                    # A source with nothing to fall back to.
+                    {"id": 4, "name": "Ring", "size_source": "ring"},
+                    # Neither a source nor a size.
+                    {"id": 5, "name": "Kettle"},
+                ]
+            }
+        )
+    )
+
+    guide = await call("wishlist_get_gift_guide", {"username": "sarah"})
+
+    assert [i["effective_size"] for i in guide["items"]] == ["L", "9", "34", None, None]
+    assert guide["items"][0]["size_source"] == "shirt"
+    assert guide["items"][0]["size"] == "L"
+
+
+@respx.mock
+async def test_the_other_wishlist_tools_return_the_raw_size_fields_only(call):
+    respx.get(f"{API}/api/v1/wishlists/sarah").mock(
+        return_value=ok(
+            {"items": [{"id": 1, "name": "Tee", "size": "L", "size_source": "shirt"}]}
+        )
+    )
+    respx.get(f"{API}/api/v1/wishlists/mine").mock(
+        return_value=ok(
+            {
+                "items": [
+                    {
+                        "id": 1,
+                        "name": "Tee",
+                        "size_source": "shirt",
+                        "visibility": "public",
+                    }
+                ]
+            }
+        )
+    )
+
+    theirs = await call("wishlist_get_wishlist", {"username": "sarah"})
+    mine = await call("wishlist_get_my_wishlist")
+
+    assert theirs[0]["size_source"] == "shirt" and "effective_size" not in theirs[0]
+    assert mine[0]["size_source"] == "shirt" and "effective_size" not in mine[0]
+    assert mine[0]["color"] is None and mine[0]["brand"] is None
+
+
+@respx.mock
 async def test_the_gift_guide_carries_each_items_price(call):
     respx.get(f"{API}/api/v1/profiles/sarah").mock(
         return_value=ok({"username": "sarah", "hidden_from_you": []})
