@@ -34,6 +34,7 @@ from wishlist_mcp.schemas import (
     GiftFormat,
     GiftGuide,
     GiftProfile,
+    GuideItem,
     ImagePurpose,
     Interest,
     InviteOutcome,
@@ -59,6 +60,7 @@ from wishlist_mcp.schemas import (
     RemovedMember,
     RequestOutcome,
     SettledRequest,
+    SizeSource,
     UpcomingOccasions,
     UploadedImage,
     Visibility,
@@ -157,13 +159,21 @@ def register(mcp: FastMCP) -> None:
 
         Read allergies and dietary before suggesting anything consumable. They
         answer different questions: allergies is harm, dietary is a rule kept by
-        choice, and neither implies the other."""
+        choice, and neither implies the other.
+
+        Each item carries effective_size, the size to buy. When the item's
+        size_source is shirt, shoe, pants, or ring and the profile shows you
+        that size, it is the profile's value; otherwise it is the item's own
+        size. The raw size and size_source stay on the item. A null
+        effective_size with a size_source set can mean the person hides that
+        size from you: check hidden_from_you before saying they have none."""
         client = api()
         profile = client.get(f"/api/v1/profiles/{segment(username)}")
         wishlist = client.get(f"/api/v1/wishlists/{segment(username)}")
+        shown = GiftProfile(**_profile_fields(profile, GiftProfile))
         return GiftGuide(
-            profile=GiftProfile(**_profile_fields(profile, GiftProfile)),
-            items=[_item(i) for i in (wishlist or {}).get("items", [])],
+            profile=shown,
+            items=[_guide_item(i, shown) for i in (wishlist or {}).get("items", [])],
             in_your_circle=bool((profile or {}).get("in_your_circle")),
         )
 
@@ -177,7 +187,14 @@ def register(mcp: FastMCP) -> None:
     @mcp.tool(annotations=READ)
     def wishlist_get_wishlist(username: str) -> list[Item]:
         """One person's wishlist without their profile. Prefer
-        wishlist_get_gift_guide unless you specifically do not want the profile."""
+        wishlist_get_gift_guide unless you specifically do not want the profile.
+
+        Items carry the raw size and size_source. size_source tells you which
+        profile size applies; this tool has no profile in hand, so it does not
+        resolve it. The gift guide resolves it.
+
+        Items carry image_url (the cover photo) and extra_image_urls (more
+        photos, empty when there are none)."""
         data = api().get(f"/api/v1/wishlists/{segment(username)}")
         return [_item(i) for i in (data or {}).get("items", [])]
 
@@ -191,7 +208,14 @@ def register(mcp: FastMCP) -> None:
     @mcp.tool(annotations=READ)
     def wishlist_get_my_wishlist() -> list[MyItem]:
         """Your own wishlist, including items marked circle_only. Use this to get
-        item ids before updating or deleting an item."""
+        item ids before updating or deleting an item.
+
+        Items carry the raw size and size_source. size_source tells you which
+        of your profile sizes applies; this tool does not resolve it, and the
+        gift guide does that for other people's items.
+
+        Items carry image_url (the cover photo) and extra_image_urls (more
+        photos, empty when there are none)."""
         data = api().get("/api/v1/wishlists/mine")
         return [_my_item(i) for i in (data or {}).get("items", [])]
 
@@ -327,8 +351,12 @@ def register(mcp: FastMCP) -> None:
         store_notes: str | None = None,
         priority: Priority | None = None,
         size: str | None = None,
+        size_source: SizeSource | None = None,
+        color: str | None = None,
+        brand: str | None = None,
         category: str | None = None,
         image_url: str | None = None,
+        extra_image_urls: list[str] | None = None,
         visibility: Visibility = "public",
         price_min: float | None = None,
         price_max: float | None = None,
@@ -343,9 +371,19 @@ def register(mcp: FastMCP) -> None:
         wins over what the page says. The page may have nothing to read; that
         is not an error, it just leaves those fields as you set them.
 
-        Use store_notes for the details that stop someone buying the wrong
-        variant, such as colour, model, or which shop. Set visibility to
+        Use store_notes for the other details that stop someone buying the wrong
+        variant, such as the model or which shop. Set visibility to
         circle_only to show the item to your circle and nobody else.
+
+        size_source is for clothing, shoes, and rings. It means "use the owner's
+        profile size of that kind": shirt, shoe, pants, or ring. It stores no
+        number: whoever reads the item looks the size up on your profile, so it
+        stays right when your profile changes. The item's own size text is the
+        fallback when the profile has no such size, and setting size_source does
+        not clear it.
+
+        color and brand are optional, at most 64 characters each. Put the
+        shop's colour and brand in these fields rather than in store_notes.
 
         Price is optional. A single price sets price_min and price_max
         to the same number; a range sets both, lowest first; "up to 3000" is
@@ -355,8 +393,13 @@ def register(mcp: FastMCP) -> None:
         price is set, and it is stored as given: never convert the amount into
         another currency. Amounts are 0 or more with at most two decimals.
 
-        image_url is an http or https link to a photo. For an image file, call
-        wishlist_upload_image first and pass the url it returns."""
+        image_url is an http or https link to the cover photo. For an image file,
+        call wishlist_upload_image first and pass the url it returns.
+
+        extra_image_urls adds more photos after the cover: at most 4 (5 photos
+        with the cover), each an http or https link, usually the url
+        wishlist_upload_image returned. The cover stays image_url."""
+        _check_extra_photos(extra_image_urls)
         if link:
             preview = (
                 api().post("/api/v1/wishlists/mine/items/link-preview", {"url": link})
@@ -377,8 +420,12 @@ def register(mcp: FastMCP) -> None:
             store_notes=store_notes,
             priority=priority,
             size=size,
+            size_source=size_source,
+            color=color,
+            brand=brand,
             category=category,
             image_url=image_url,
+            extra_image_urls=extra_image_urls,
             visibility=visibility,
             price_min=price_min,
             price_max=price_max,
@@ -394,16 +441,26 @@ def register(mcp: FastMCP) -> None:
         store_notes: str | None = None,
         priority: Priority | None = None,
         size: str | None = None,
+        size_source: SizeSource | None = None,
+        color: str | None = None,
+        brand: str | None = None,
         category: str | None = None,
         image_url: str | None = None,
+        extra_image_urls: list[str] | None = None,
         visibility: Visibility | None = None,
         price_min: float | None = None,
         price_max: float | None = None,
         price_currency: str | None = None,
         clear_price: bool = False,
+        clear_size_source: bool = False,
     ) -> MyItem:
         """Change one of your own wishlist items. Omitted fields are left as they
         are. Get item_id from wishlist_get_my_wishlist.
+
+        size_source, color, and brand work as in wishlist_add_item. To remove a
+        colour or brand, pass an empty string. To stop an item using a profile
+        size, pass clear_size_source=true; the item's own size text is not
+        touched by that or by setting size_source.
 
         Price works as in wishlist_add_item: a single price sets price_min and
         price_max to the same number, a range sets both, and price_currency is
@@ -423,20 +480,39 @@ def register(mcp: FastMCP) -> None:
         price_currency give "from price_min".
 
         image_url is an http or https link, or a url from wishlist_upload_image.
-        Pass an empty string to remove the photo."""
+        Pass an empty string to remove the photo.
+
+        extra_image_urls is the list of more photos after the cover: at most 4,
+        each an http or https link, usually a url from wishlist_upload_image.
+        Passing it replaces all the extra photos, so send the whole list you want
+        to end up with, read from wishlist_get_my_wishlist first. An empty list
+        removes them all. Leaving it out leaves them as they are. The cover
+        stays image_url."""
+        _check_extra_photos(extra_image_urls)
         payload = _present(
             name=name,
             url=url,
             store_notes=store_notes,
             priority=priority,
             size=size,
+            size_source=size_source,
+            color=color,
+            brand=brand,
             category=category,
             image_url=image_url,
+            extra_image_urls=extra_image_urls,
             visibility=visibility,
             price_min=price_min,
             price_max=price_max,
             price_currency=price_currency,
         )
+        if clear_size_source:
+            if size_source is not None:
+                raise ToolError(
+                    "Pass size_source or clear_size_source, not both: one sets it "
+                    "and the other removes it."
+                )
+            payload["size_source"] = None
         if clear_price:
             # The one place an explicit null is sent. The caller asked for it by
             # name, so it cannot wipe a price nobody mentioned, and it only
@@ -463,8 +539,9 @@ def register(mcp: FastMCP) -> None:
         photo. It sets the size and nothing else.
 
         This saves nothing to your profile or wishlist. Pass the returned url to
-        wishlist_add_item or wishlist_update_item as image_url, or to
-        wishlist_update_my_profile as avatar_url. Uploads are rate limited."""
+        wishlist_add_item or wishlist_update_item as image_url (the cover) or
+        in extra_image_urls (more photos), or to wishlist_update_my_profile as
+        avatar_url. Uploads are rate limited."""
         raw = _decode_image(image_base64)
         data = api().post_file(
             "/api/v1/media/images",
@@ -780,6 +857,26 @@ def _item(data: dict) -> Item:
     return Item(**{k: v for k, v in data.items() if k in keep})
 
 
+def _guide_item(data: dict, profile: GiftProfile) -> GuideItem:
+    keep = set(Item.model_fields)
+    item = Item(**{k: v for k, v in data.items() if k in keep})
+    return GuideItem(**item.model_dump(), effective_size=_effective_size(item, profile))
+
+
+def _effective_size(item: Item, profile: GiftProfile) -> str | None:
+    """The size to buy: the profile's size of the kind the item names, when the
+    profile shows it to this viewer, else the item's own size.
+
+    The API never resolves size_source; the profile it sends already withholds
+    what the viewer may not see, so a null there falls back to the item's size.
+    """
+    if item.size_source:
+        from_profile = getattr(profile, f"{item.size_source}_size", None)
+        if isinstance(from_profile, str) and from_profile:
+            return from_profile
+    return item.size or None
+
+
 def _my_item(data: dict | None) -> MyItem:
     data = data or {}
     keep = set(MyItem.model_fields)
@@ -902,6 +999,19 @@ def _present(**kwargs) -> dict:
     dietary and interests it means "nothing applies", which is an answer.
     """
     return {k: v for k, v in kwargs.items() if v is not None}
+
+
+MAX_EXTRA_PHOTOS = 4
+
+
+def _check_extra_photos(urls: list[str] | None) -> None:
+    """The API refuses a fifth extra photo too. Saying so here costs no round trip
+    and the model gets the same sentence either way."""
+    if urls is not None and len(urls) > MAX_EXTRA_PHOTOS:
+        raise ToolError(
+            f"At most {MAX_EXTRA_PHOTOS} extra photos; you passed {len(urls)}. "
+            "Keep the best ones and send those."
+        )
 
 
 def _tags(interests: list[Interest] | None) -> list[dict] | None:

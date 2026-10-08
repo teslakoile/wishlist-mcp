@@ -16,6 +16,9 @@ from pydantic import BaseModel, Field
 Priority = Literal["low", "medium", "high"]
 Visibility = Literal["public", "circle_only"]
 ImagePurpose = Literal["avatar", "item"]
+# Which profile size an item's size is: the owner's shirt_size, shoe_size,
+# pants_size, or ring_size.
+SizeSource = Literal["shirt", "shoe", "pants", "ring"]
 InviteState = Literal["valid", "used", "expired"]
 
 # Mirrors DietaryValue, GiftFormatValue, InterestCategory, and PriceComfortValue in
@@ -218,8 +221,24 @@ class Item(BaseModel):
     store_notes: str | None = None
     priority: Priority | None = None
     size: str | None = None
+    size_source: SizeSource | None = Field(
+        None,
+        description="Set when this item's size is the owner's own profile size of "
+        "that kind: 'shirt' means their shirt_size, 'shoe' their shoe_size, "
+        "'pants' their pants_size, 'ring' their ring_size. The profile holds the "
+        "number, so read it there; the gift guide resolves it for you in "
+        "effective_size. size is the owner's own note and the fallback when the "
+        "profile has nothing.",
+    )
+    color: str | None = Field(None, description="The colour of this variant at the shop.")
+    brand: str | None = Field(None, description="The brand of this item.")
     category: str | None = None
     image_url: str | None = None
+    extra_image_urls: list[str] = Field(
+        default_factory=list,
+        description="More photo links after the cover image_url, in the order the "
+        "owner put them. Empty when the item has only a cover. At most 4.",
+    )
     price_min: float | None = Field(
         None,
         description="The lowest price, in price_currency. Equal to price_max for a "
@@ -244,9 +263,22 @@ class MyItem(Item):
     visibility: Visibility
 
 
+class GuideItem(Item):
+    """An item as the gift guide returns it: the raw fields plus the size that
+    applies."""
+
+    effective_size: str | None = Field(
+        None,
+        description="The size to buy. When size_source is set and the profile "
+        "shows that size to you, it is the profile's value; otherwise it is the "
+        "item's own size. Null means no size is known, or the profile hides it "
+        "from you (check hidden_from_you).",
+    )
+
+
 class GiftGuide(BaseModel):
     profile: GiftProfile
-    items: list[Item]
+    items: list[GuideItem]
     in_your_circle: bool = Field(
         description="False means you are seeing only their public information, and "
         "there may be more they share with their circle. An empty hidden_from_you "
@@ -437,8 +469,9 @@ class UploadedImage(BaseModel):
     """A stored photo. Nothing shows it until its url is saved somewhere."""
 
     url: str = Field(
-        description="Pass this as image_url to wishlist_add_item or "
-        "wishlist_update_item, or as avatar_url to wishlist_update_my_profile. "
+        description="Pass this as image_url (the cover) or in extra_image_urls "
+        "(more photos) to wishlist_add_item or wishlist_update_item, or as "
+        "avatar_url to wishlist_update_my_profile. "
         "Uploading alone changes nothing anyone can see."
     )
     width: int
