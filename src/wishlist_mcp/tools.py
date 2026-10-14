@@ -100,10 +100,10 @@ CALENDAR_DEFAULT_DAYS = 90
 CALENDAR_MAX_DAYS = 365
 NOTIFICATION_LIMIT = 50
 NOTIFICATION_MAX_LIMIT = 200
-# Decoded bytes. The API accepts 8 MB, but it fits every photo inside 1024 px
-# and re-encodes it as WebP, so a larger input only costs the calling model
-# tokens for pixels that are thrown away. Base64 is a third bigger again.
-UPLOAD_MAX_BYTES = 2 * 1024 * 1024
+# Decoded bytes. Matches the API's own limit (MAX_UPLOAD_BYTES in
+# wishlist-backend's media.py) so a photo the website accepts also goes
+# through here.
+UPLOAD_MAX_BYTES = 8 * 1024 * 1024
 DATA_URI_PREFIX = re.compile(r"^data:[^,]*;base64,", re.IGNORECASE)
 
 
@@ -531,9 +531,8 @@ def register(mcp: FastMCP) -> None:
 
         image_base64 is the file's bytes in base64, with or without a
         "data:image/...;base64," prefix. JPEG, PNG, WebP, GIF, and HEIC all work.
-        At most 2 MB before encoding. The API shrinks every photo to fit 1024 px
-        (item) or 512 px (avatar), so resize a large photo to that first rather
-        than sending pixels that will be discarded.
+        At most 8 MB before encoding. The API shrinks every photo to fit 1024 px
+        (item) or 512 px (avatar) automatically.
 
         purpose is "item" for a wishlist item photo or "avatar" for your profile
         photo. It sets the size and nothing else.
@@ -983,8 +982,7 @@ def _decode_image(value: str) -> bytes:
 
 def _too_large() -> str:
     return (
-        f"That photo is over {UPLOAD_MAX_BYTES // (1024 * 1024)} MB. Resize it to "
-        "about 1024 px on the long side and try again."
+        f"That photo is over {UPLOAD_MAX_BYTES // (1024 * 1024)} MB. Try a smaller file."
     )
 
 
