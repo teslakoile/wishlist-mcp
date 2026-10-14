@@ -1798,6 +1798,25 @@ async def test_a_data_uri_and_line_breaks_are_accepted(call):
     assert base64.b64decode(PIXEL_PNG) in route.calls.last.request.content
 
 
+@respx.mock
+async def test_a_photo_between_2_and_8_mb_is_accepted(call):
+    """Previously rejected at the old 2 MB cap; now within the 8 MB limit that
+    matches the API's own MAX_UPLOAD_BYTES."""
+    import base64
+    import os
+
+    route = _upload_route()
+    decoded = os.urandom(4 * 1024 * 1024)
+    value = base64.b64encode(decoded).decode()
+
+    result = await call(
+        "wishlist_upload_image", {"image_base64": value, "purpose": "item"}
+    )
+
+    assert result == UPLOADED
+    assert decoded in route.calls.last.request.content
+
+
 @pytest.mark.parametrize(
     "value,fragment",
     [
@@ -1805,7 +1824,7 @@ async def test_a_data_uri_and_line_breaks_are_accepted(call):
         ("data:image/png;base64,", "is empty"),
         ("/Users/me/photo.jpg", "not valid base64"),
         ("https://example.com/a.png", "not valid base64"),
-        ("A" * ((2 * 1024 * 1024 + 2) // 3 * 4 + 4), "over 2 MB"),
+        ("A" * ((8 * 1024 * 1024 + 2) // 3 * 4 + 4), "over 8 MB"),
     ],
 )
 @respx.mock
