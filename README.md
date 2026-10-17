@@ -43,7 +43,7 @@ consent screen; it only verifies what AuthKit signed.
 
 ## The tools
 
-Thirty, one per thing you can already do by hand in the web app. Parity is
+Thirty-three, one per thing you can already do by hand in the web app. Parity is
 the rule: no agent-only privileges, and nothing the app itself cannot do.
 
 | Tool | Kind |
@@ -56,6 +56,7 @@ the rule: no agent-only privileges, and nothing the app itself cannot do.
 | `wishlist_get_my_wishlist` | read |
 | `wishlist_list_circle` | read |
 | `wishlist_list_circle_requests` | read |
+| `wishlist_list_blocked` | read |
 | `wishlist_list_nudge_prompts` | read |
 | `wishlist_list_nudges` | read |
 | `wishlist_preview_invite` | read |
@@ -70,6 +71,7 @@ the rule: no agent-only privileges, and nothing the app itself cannot do.
 | `wishlist_accept_circle_request` | write |
 | `wishlist_decline_circle_request` | write |
 | `wishlist_accept_invite` | write |
+| `wishlist_unblock_user` | write |
 | `wishlist_update_reminder_preferences` | write |
 | `wishlist_mark_notifications_read` | write |
 | `wishlist_send_nudge` | write |
@@ -78,6 +80,7 @@ the rule: no agent-only privileges, and nothing the app itself cannot do.
 | `wishlist_create_invite` | **destructive** |
 | `wishlist_delete_item` | **destructive** |
 | `wishlist_remove_circle_member` | **destructive** |
+| `wishlist_block_user` | **destructive** |
 
 `wishlist_get_gift_guide` returns a person's profile and wishlist together. It is the
 reason anyone connects this server, and without it the gift-giver journey costs three

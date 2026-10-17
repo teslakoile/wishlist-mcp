@@ -303,6 +303,19 @@ class RemovedMember(BaseModel):
     username: str
 
 
+class BlockedPerson(BaseModel):
+    """Someone you have blocked. No avatar, for the same reason CircleMember
+    has none: nothing here needs a picture to act on."""
+
+    username: str
+    display_name: str | None = None
+
+
+class BlockResult(BaseModel):
+    blocked: bool
+    username: str
+
+
 class CircleRequest(BaseModel):
     """One pending request to join a circle."""
 
