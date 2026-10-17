@@ -27,6 +27,8 @@ from wishlist_mcp.auth import InvalidAccessToken, authenticate
 from wishlist_mcp.client import WishlistAPI, segment
 from wishlist_mcp.schemas import (
     AcceptedInvite,
+    BlockedPerson,
+    BlockResult,
     CircleMember,
     CircleRequest,
     DeletedItem,
@@ -244,6 +246,19 @@ def register(mcp: FastMCP) -> None:
             incoming=[_request(r) for r in (data or {}).get("incoming", [])],
             outgoing=[_request(r) for r in (data or {}).get("outgoing", [])],
         )
+
+    @mcp.tool(annotations=READ)
+    def wishlist_list_blocked() -> list[BlockedPerson]:
+        """Everyone you have blocked. They cannot see your page, ask to join
+        your circle, or send you a nudge, and nothing tells them they are
+        blocked."""
+        data = api().get("/api/v1/circle/blocks")
+        return [
+            BlockedPerson(
+                username=b.get("username", ""), display_name=b.get("display_name")
+            )
+            for b in (data or {}).get("blocked", [])
+        ]
 
     @mcp.tool(annotations=READ)
     def wishlist_list_nudge_prompts() -> list[NudgePromptSpec]:
@@ -688,6 +703,32 @@ def register(mcp: FastMCP) -> None:
         client.delete(f"/api/v1/circle/members/{user_id}")
         return RemovedMember(removed=True, username=username)
 
+    @mcp.tool(annotations=DESTRUCTIVE)
+    def wishlist_block_user(username: str) -> BlockResult:
+        """Block someone, by username.
+
+        They stop seeing your page, and can no longer ask to join your circle
+        or send you a nudge -- every one of those attempts fails for them the
+        same way it would for an ordinary stranger, with no sign it was a
+        block. Also ends any circle relationship with them and settles
+        anything pending between you, the same cleanup
+        wishlist_remove_circle_member does, plus the block itself.
+
+        Confirm the name with the user before calling: it reaches someone who
+        is not told why they lost access, and undoing it needs a separate
+        wishlist_unblock_user call."""
+        client, user_id = _resolve_user(username)
+        client.post("/api/v1/circle/blocks", {"user_id": user_id})
+        return BlockResult(blocked=True, username=username)
+
+    @mcp.tool(annotations=WRITE_IDEMPOTENT)
+    def wishlist_unblock_user(username: str) -> BlockResult:
+        """Unblock someone, by username. Restores normal visibility and lets
+        them ask to join your circle or send a nudge again."""
+        client, user_id = _resolve_user(username)
+        client.delete(f"/api/v1/circle/blocks/{user_id}")
+        return BlockResult(blocked=False, username=username)
+
     @mcp.tool(annotations=WRITE)
     def wishlist_send_nudge(
         username: str,
@@ -952,6 +993,22 @@ def _resolve_member(username: str) -> tuple[WishlistAPI, int]:
     raise ToolError(
         f"{username} is not in your circle. Use wishlist_list_circle to see who is."
     )
+
+
+def _resolve_user(username: str) -> tuple[WishlistAPI, int]:
+    """Turn a username into the id block/unblock act on.
+
+    Unlike circle removal, the person being blocked is usually not a circle
+    member -- that is the whole point -- so _resolve_member's circle lookup
+    is the wrong list to search. The public profile endpoint resolves any
+    existing username to its id, member or not.
+    """
+    client = api()
+    data = client.get(f"/api/v1/profiles/{segment(username)}")
+    user_id = (data or {}).get("user_id")
+    if user_id is None:
+        raise ToolError(f"No account with the username {username}.")
+    return client, user_id
 
 
 def _decode_image(value: str) -> bytes:

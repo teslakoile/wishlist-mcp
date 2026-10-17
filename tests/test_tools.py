@@ -69,6 +69,9 @@ async def test_every_tool_in_the_contract_is_present():
         "wishlist_get_my_wishlist",
         "wishlist_list_circle",
         "wishlist_list_circle_requests",
+        "wishlist_list_blocked",
+        "wishlist_block_user",
+        "wishlist_unblock_user",
         "wishlist_list_nudge_prompts",
         "wishlist_list_nudges",
         "wishlist_preview_invite",
@@ -104,6 +107,7 @@ async def test_the_irreversible_tools_are_marked_destructive():
         "wishlist_create_invite",
         "wishlist_delete_item",
         "wishlist_remove_circle_member",
+        "wishlist_block_user",
     ):
         assert tools[name].annotations.destructiveHint is True, name
     assert tools["wishlist_add_item"].annotations.destructiveHint is False
@@ -1420,6 +1424,76 @@ async def test_removing_someone_who_is_not_in_the_circle_deletes_nothing(call):
 
     assert "not in your circle" in str(excinfo.value)
     assert not delete.called
+
+
+# --- blocking -----------------------------------------------------------
+
+
+@respx.mock
+async def test_blocking_resolves_the_username_via_the_profile_not_the_circle(call):
+    """The person being blocked is usually not a circle member -- that is the
+    point -- so this must not reuse the circle-only lookup removal does."""
+    respx.get(f"{API}/api/v1/profiles/tom").mock(
+        return_value=ok({"user_id": 10, "username": "tom"})
+    )
+    post = respx.post(f"{API}/api/v1/circle/blocks").mock(
+        return_value=ok({"blocked_user_id": 10})
+    )
+
+    outcome = await call("wishlist_block_user", {"username": "tom"})
+
+    assert outcome == {"blocked": True, "username": "tom"}
+    assert post.calls.last.request.content == b'{"user_id":10}'
+
+
+@respx.mock
+async def test_blocking_an_unknown_username_fails_before_any_block_call(call):
+    respx.get(f"{API}/api/v1/profiles/ghost").mock(
+        return_value=err(404, "not_found", "User not found")
+    )
+    post = respx.post(f"{API}/api/v1/circle/blocks").mock(return_value=ok({}))
+
+    with pytest.raises(ToolError):
+        await call("wishlist_block_user", {"username": "ghost"})
+
+    assert not post.called
+
+
+@respx.mock
+async def test_unblocking_resolves_the_username_and_deletes(call):
+    respx.get(f"{API}/api/v1/profiles/tom").mock(
+        return_value=ok({"user_id": 10, "username": "tom"})
+    )
+    delete = respx.delete(f"{API}/api/v1/circle/blocks/10").mock(return_value=ok(None))
+
+    outcome = await call("wishlist_unblock_user", {"username": "tom"})
+
+    assert outcome == {"blocked": False, "username": "tom"}
+    assert delete.called
+
+
+@respx.mock
+async def test_list_blocked_has_no_avatar_field(call):
+    """Mirrors wishlist_list_circle: a picture is nothing to act on here."""
+    respx.get(f"{API}/api/v1/circle/blocks").mock(
+        return_value=ok(
+            {
+                "blocked": [
+                    {
+                        "user_id": 9,
+                        "username": "sarah",
+                        "display_name": "Sarah",
+                        "avatar_url": "https://cdn.example.com/sarah.webp",
+                        "created_at": "2026-10-17T00:00:00Z",
+                    }
+                ]
+            }
+        )
+    )
+
+    blocked = (await call("wishlist_list_blocked"))[0]
+
+    assert blocked == {"username": "sarah", "display_name": "Sarah"}
 
 
 @respx.mock
