@@ -347,8 +347,7 @@ def register(mcp: FastMCP) -> None:
     @mcp.tool(annotations=READ)
     def wishlist_get_reminder_preferences() -> ReminderPreferences:
         """How the user currently wants occasion reminders: whether email is on,
-        how far ahead, which region's holidays, and whether their own birthday is
-        announced to their circle.
+        how far ahead, and which region's holidays.
 
         Read this before changing any of it, because
         wishlist_update_reminder_preferences replaces lead_days wholesale rather
