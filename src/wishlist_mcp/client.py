@@ -43,7 +43,12 @@ class WishlistAPI:
         }
 
     def _request(
-        self, method: str, path: str, headers: dict | None = None, **kwargs
+        self,
+        method: str,
+        path: str,
+        headers: dict | None = None,
+        by_username: bool = False,
+        **kwargs,
     ) -> Any:
         url = f"{settings.api_base_url.rstrip('/')}{path}"
         try:
@@ -66,20 +71,24 @@ class WishlistAPI:
         if response.status_code >= 400:
             code = (body.get("error") or {}).get("code")
             note_failure(code or f"http_{response.status_code}")
-            raise ToolError(_message_for(response.status_code, body))
+            raise ToolError(
+                _message_for(response.status_code, body, by_username=by_username)
+            )
         return body.get("data")
 
-    def get(self, path: str, params: dict | None = None) -> Any:
-        return self._request("GET", path, params=_clean(params))
+    def get(
+        self, path: str, params: dict | None = None, by_username: bool = False
+    ) -> Any:
+        return self._request("GET", path, params=_clean(params), by_username=by_username)
 
-    def post(self, path: str, json: dict | None = None) -> Any:
-        return self._request("POST", path, json=json or {})
+    def post(self, path: str, json: dict | None = None, by_username: bool = False) -> Any:
+        return self._request("POST", path, json=json or {}, by_username=by_username)
 
-    def patch(self, path: str, json: dict) -> Any:
-        return self._request("PATCH", path, json=json)
+    def patch(self, path: str, json: dict, by_username: bool = False) -> Any:
+        return self._request("PATCH", path, json=json, by_username=by_username)
 
-    def delete(self, path: str) -> Any:
-        return self._request("DELETE", path)
+    def delete(self, path: str, by_username: bool = False) -> Any:
+        return self._request("DELETE", path, by_username=by_username)
 
     def post_file(self, path: str, files: dict, data: dict) -> Any:
         """A multipart POST. The JSON content-type is left off on purpose: httpx
@@ -104,7 +113,7 @@ def segment(value: str) -> str:
     return quote(str(value), safe="")
 
 
-def _message_for(status: int, body: dict) -> str:
+def _message_for(status: int, body: dict, by_username: bool = False) -> str:
     error = body.get("error") or {}
     code = error.get("code", "")
     message = error.get("message") or "wishlist rejected the request."
@@ -117,10 +126,12 @@ def _message_for(status: int, body: dict) -> str:
             "client settings."
         )
     if status == 404:
-        return (
-            f"{_sentence(message)} Try wishlist_search_people to find the right "
-            "username first."
-        )
+        if by_username:
+            return (
+                f"{_sentence(message)} Try wishlist_search_people to find the "
+                "right username first."
+            )
+        return _sentence(message)
     if status >= 500:
         return "wishlist is having trouble right now. Try again in a moment."
     return message

@@ -170,8 +170,8 @@ def register(mcp: FastMCP) -> None:
         effective_size with a size_source set can mean the person hides that
         size from you: check hidden_from_you before saying they have none."""
         client = api()
-        profile = client.get(f"/api/v1/profiles/{segment(username)}")
-        wishlist = client.get(f"/api/v1/wishlists/{segment(username)}")
+        profile = client.get(f"/api/v1/profiles/{segment(username)}", by_username=True)
+        wishlist = client.get(f"/api/v1/wishlists/{segment(username)}", by_username=True)
         shown = GiftProfile(**_profile_fields(profile, GiftProfile))
         return GiftGuide(
             profile=shown,
@@ -183,7 +183,7 @@ def register(mcp: FastMCP) -> None:
     def wishlist_get_profile(username: str) -> GiftProfile:
         """One person's profile without their wishlist. Prefer
         wishlist_get_gift_guide unless you specifically do not want the items."""
-        data = api().get(f"/api/v1/profiles/{segment(username)}")
+        data = api().get(f"/api/v1/profiles/{segment(username)}", by_username=True)
         return GiftProfile(**_profile_fields(data, GiftProfile))
 
     @mcp.tool(annotations=READ)
@@ -197,7 +197,7 @@ def register(mcp: FastMCP) -> None:
 
         Items carry image_url (the cover photo) and extra_image_urls (more
         photos, empty when there are none)."""
-        data = api().get(f"/api/v1/wishlists/{segment(username)}")
+        data = api().get(f"/api/v1/wishlists/{segment(username)}", by_username=True)
         return [_item(i) for i in (data or {}).get("items", [])]
 
     @mcp.tool(annotations=READ)
@@ -1003,7 +1003,7 @@ def _resolve_user(username: str) -> tuple[WishlistAPI, int]:
     existing username to its id, member or not.
     """
     client = api()
-    data = client.get(f"/api/v1/profiles/{segment(username)}")
+    data = client.get(f"/api/v1/profiles/{segment(username)}", by_username=True)
     user_id = (data or {}).get("user_id")
     if user_id is None:
         raise ToolError(f"No account with the username {username}.")
