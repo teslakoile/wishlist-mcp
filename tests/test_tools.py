@@ -1041,6 +1041,72 @@ async def test_an_unknown_username_says_what_to_do_next(call):
 
 
 @respx.mock
+@pytest.mark.parametrize(
+    ("tool", "method", "path", "arguments"),
+    [
+        (
+            "wishlist_delete_item",
+            "DELETE",
+            "/api/v1/wishlists/mine/items/9",
+            {"item_id": 9},
+        ),
+        (
+            "wishlist_update_item",
+            "PATCH",
+            "/api/v1/wishlists/mine/items/9",
+            {"item_id": 9, "name": "Boots"},
+        ),
+        (
+            "wishlist_accept_circle_request",
+            "POST",
+            "/api/v1/circle/requests/3/accept",
+            {"request_id": 3},
+        ),
+        (
+            "wishlist_decline_circle_request",
+            "POST",
+            "/api/v1/circle/requests/3/decline",
+            {"request_id": 3},
+        ),
+        (
+            "wishlist_answer_nudge",
+            "POST",
+            "/api/v1/circle/nudges/9/answer",
+            {"nudge_id": 9, "answer": "still_current"},
+        ),
+        (
+            "wishlist_dismiss_nudge",
+            "POST",
+            "/api/v1/circle/nudges/9/dismiss",
+            {"nudge_id": 9},
+        ),
+        (
+            "wishlist_accept_invite",
+            "POST",
+            "/api/v1/invites/tok/accept",
+            {"invite_token": "tok"},
+        ),
+    ],
+)
+async def test_an_unrelated_not_found_is_not_blamed_on_the_username(
+    call, tool, method, path, arguments
+):
+    """These tools address an item, request, nudge, or invite by id or token,
+    never by username. A 404 here means that id or token is gone, and sending a
+    model to wishlist_search_people for it is advice for a different problem."""
+    respx.route(method=method, url=f"{API}{path}").mock(
+        return_value=err(404, "not_found", "Not found.")
+    )
+
+    with pytest.raises(ToolError) as excinfo:
+        await call(tool, arguments)
+
+    message = str(excinfo.value)
+    assert "wishlist_search_people" not in message
+    assert message == "Not found."
+
+
+@respx.mock
 async def test_an_expired_session_tells_the_user_to_reconnect(call):
     respx.get(f"{API}/api/v1/profiles/me").mock(
         return_value=err(401, "unauthorized", "Not authenticated")
