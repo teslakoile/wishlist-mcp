@@ -120,7 +120,7 @@ request with `invalid_query_params`.
    OAuth client **Use Anthropic's hosted client metadata**, which is CIMD.
 5. Choose **Add**, then **Connect**, then approve access.
 
-The connector page then splits the tools into 8 read-only and 6 write/delete,
+The connector page then splits the tools into 20 read-only and 20 write/delete,
 taken from the annotations each tool carries. Both groups start at **Needs
 approval**, so Claude asks before every call until you change that.
 
@@ -149,17 +149,19 @@ tool call before you believe it.
 
 ## What a connection can reach
 
-Fourteen tools. They read your profile and wishlist including the parts you keep
+Forty tools. They read your profile and wishlist including the parts you keep
 private, read other people's profiles and wishlists exactly as the website would
-show them to you, add, change, and delete items on your own wishlist, and send
-and accept circle invites.
+show them to you, add, change, and delete items on your own wishlist, send and
+accept circle invites, read your groups and what their members share with them,
+and accept or decline group invites.
 
 Two of those write to the world outside your account. Sending an invite emails a
 real person and cannot be unsent. Accepting an invite lets that person see
-everything you have marked circle-only. Both are marked destructive in the tool
+everything you share with your circle. Both are marked destructive in the tool
 metadata, so a well-behaved client asks you first.
 
-Rate limits apply per account: 60 tool calls a minute and 20 invites a day.
+Rate limits apply per account: 60 tool calls a minute and 30 invites a day, shared between circle invites,
+circle requests, and group invites.
 
 ## Disconnecting
 
