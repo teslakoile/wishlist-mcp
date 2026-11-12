@@ -858,7 +858,8 @@ def register(mcp: FastMCP) -> None:
         item_id: int | None = None,
         signed: bool = False,
     ) -> Nudge:
-        """Ask someone in your circle one of the catalogue questions.
+        """Ask someone in your circle, or in a group you share, one of the catalogue
+        questions.
 
         Anonymous unless signed is true, and leave it false unless the user asks
         to be named. Asking whether someone still wants an item, under your
