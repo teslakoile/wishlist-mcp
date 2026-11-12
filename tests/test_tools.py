@@ -1,4 +1,4 @@
-"""The thirty tools, driven through a real MCP client with the wishlist API stubbed.
+"""The forty tools, driven through a real MCP client with the wishlist API stubbed.
 
 What these check is this server's own job: shaping requests, shaping responses,
 and turning API errors into sentences a model can act on. The visibility and
@@ -94,6 +94,13 @@ async def test_every_tool_in_the_contract_is_present():
         "wishlist_send_nudge",
         "wishlist_answer_nudge",
         "wishlist_dismiss_nudge",
+        "wishlist_list_groups",
+        "wishlist_get_group",
+        "wishlist_get_group_member_wishlist",
+        "wishlist_list_group_events",
+        "wishlist_list_group_invites",
+        "wishlist_accept_group_invite",
+        "wishlist_decline_group_invite",
     }
 
 
@@ -2224,3 +2231,358 @@ async def test_an_unsupported_region_never_reaches_the_api(call):
         await call("wishlist_update_reminder_preferences", {"region": "ZZ"})
 
     assert not route.called
+
+
+# --- groups ------------------------------------------------------------------
+
+ORGANIZER = {
+    "user_id": 1,
+    "username": "alice",
+    "display_name": "Alice",
+    "avatar_url": None,
+}
+EVENT = {"id": 3, "group_id": 4, "name": "Gift swap", "date": "2026-12-19", "time": None}
+GROUP = {
+    "id": 4,
+    "name": "Family",
+    "icon_url": None,
+    "organizer": ORGANIZER,
+    "member_count": 3,
+    "my_role": "member",
+    "share_private_details": False,
+    "events": [EVENT],
+    "created_at": "2026-11-01T10:00:00Z",
+}
+GROUP_ITEM = {
+    "id": 21,
+    "user_id": 1,
+    "name": "Wool socks",
+    "visibility": "circle_only",
+    "audience": None,
+    "is_reserved": False,
+    "reserved_by_you": False,
+    "shared_as": "group",
+    "created_at": "2026-11-01T10:00:00Z",
+}
+MEMBER = {
+    **ORGANIZER,
+    "role": "organizer",
+    "joined_at": "2026-11-01T10:00:00Z",
+    "group_item_count": 1,
+    "public_item_count": 0,
+    "shares_private_details": True,
+    "preview_items": [GROUP_ITEM],
+}
+
+
+@respx.mock
+async def test_listing_groups_unwraps_the_array_and_drops_database_keys(call):
+    route = respx.get(f"{API}/api/v1/groups").mock(return_value=ok({"groups": [GROUP]}))
+
+    groups = await call("wishlist_list_groups")
+
+    assert route.called
+    assert [g["id"] for g in groups] == [4]
+    assert groups[0]["organizer"] == {
+        "username": "alice",
+        "display_name": "Alice",
+        "avatar_url": None,
+    }
+    assert groups[0]["events"][0]["name"] == "Gift swap"
+
+
+@respx.mock
+async def test_a_group_comes_with_its_members_in_one_call(call):
+    one = respx.get(f"{API}/api/v1/groups/4").mock(return_value=ok(GROUP))
+    members = respx.get(f"{API}/api/v1/groups/4/members").mock(
+        return_value=ok({"members": [MEMBER]})
+    )
+
+    group = await call("wishlist_get_group", {"group_id": 4})
+
+    assert one.called and members.called
+    assert group["name"] == "Family"
+    assert group["member_count"] == 3
+    member = group["members"][0]
+    assert member["username"] == "alice"
+    assert member["role"] == "organizer"
+    assert "user_id" not in member
+    assert member["preview_items"][0]["shared_as"] == "group"
+    assert "audience" not in member["preview_items"][0]
+
+
+@respx.mock
+async def test_a_member_wishlist_carries_shared_as_and_the_shared_details(call):
+    route = respx.get(f"{API}/api/v1/groups/4/members/alice/wishlist").mock(
+        return_value=ok(
+            {
+                "member": MEMBER,
+                "details": {
+                    "birthday": {"month": 12, "day": 19},
+                    "shirt_size": "M",
+                    "shoe_size": None,
+                    "pants_size": None,
+                    "ring_size": None,
+                    "allergies": "Peanuts",
+                    "dietary": ["vegetarian"],
+                    "address": "1 Main St, Manila, PH",
+                },
+                "items": [GROUP_ITEM, {**GROUP_ITEM, "id": 22, "shared_as": "public"}],
+            }
+        )
+    )
+
+    result = await call(
+        "wishlist_get_group_member_wishlist", {"group_id": 4, "username": "alice"}
+    )
+
+    assert route.called
+    assert result["member"]["username"] == "alice"
+    assert [i["shared_as"] for i in result["items"]] == ["group", "public"]
+    assert result["details"]["birthday"] == {"month": 12, "day": 19}
+    assert result["details"]["address"] == "1 Main St, Manila, PH"
+
+
+@respx.mock
+async def test_a_member_wishlist_with_nothing_shared_has_null_details(call):
+    respx.get(f"{API}/api/v1/groups/4/members/alice/wishlist").mock(
+        return_value=ok({"member": MEMBER, "details": None, "items": []})
+    )
+
+    result = await call(
+        "wishlist_get_group_member_wishlist", {"group_id": 4, "username": "alice"}
+    )
+
+    assert result["details"] is None
+    assert result["items"] == []
+
+
+@respx.mock
+async def test_a_member_username_cannot_escape_its_path_segment(call):
+    route = respx.route(method="GET").mock(
+        return_value=ok({"member": MEMBER, "details": None, "items": []})
+    )
+
+    await call(
+        "wishlist_get_group_member_wishlist",
+        {"group_id": 4, "username": "../../../circle/members"},
+    )
+
+    raw = route.calls.last.request.url.raw_path
+    assert raw == b"/api/v1/groups/4/members/..%2F..%2F..%2Fcircle%2Fmembers/wishlist"
+
+
+@respx.mock
+async def test_a_member_not_in_the_group_is_reported_without_a_search_hint(call):
+    respx.get(f"{API}/api/v1/groups/4/members/zed/wishlist").mock(
+        return_value=err(404, "member_not_found", "That person isn't in this group.")
+    )
+
+    with pytest.raises(ToolError) as excinfo:
+        await call(
+            "wishlist_get_group_member_wishlist", {"group_id": 4, "username": "zed"}
+        )
+
+    assert "isn't in this group" in str(excinfo.value)
+    assert "wishlist_search_people" not in str(excinfo.value)
+
+
+@respx.mock
+async def test_group_events_unwrap_and_carry_the_group_name(call):
+    route = respx.get(f"{API}/api/v1/groups/events").mock(
+        return_value=ok({"events": [{**EVENT, "group_name": "Family"}]})
+    )
+
+    events = await call("wishlist_list_group_events")
+
+    assert route.called
+    assert events == [{**EVENT, "group_name": "Family"}]
+
+
+@respx.mock
+async def test_group_invites_waiting_on_you_unwrap_by_id(call):
+    route = respx.get(f"{API}/api/v1/group-invites").mock(
+        return_value=ok(
+            {
+                "invites": [
+                    {
+                        "id": 8,
+                        "group_id": 4,
+                        "group_name": "Family",
+                        "group_icon_url": None,
+                        "organizer": ORGANIZER,
+                        "member_count": 3,
+                        "sent_at": "2026-11-10T10:00:00Z",
+                    }
+                ]
+            }
+        )
+    )
+
+    invites = await call("wishlist_list_group_invites")
+
+    assert route.called
+    assert invites[0]["id"] == 8
+    assert invites[0]["organizer"]["username"] == "alice"
+    assert "user_id" not in invites[0]["organizer"]
+
+
+@respx.mock
+async def test_accepting_a_group_invite_keeps_private_details_private_by_default(call):
+    route = respx.post(f"{API}/api/v1/group-invites/received/8/accept").mock(
+        return_value=ok({"group_id": 4})
+    )
+
+    joined = await call("wishlist_accept_group_invite", {"invite_id": 8})
+
+    assert json.loads(route.calls.last.request.content) == {
+        "share_private_details": False
+    }
+    assert joined == {"group_id": 4, "share_private_details": False}
+
+
+@respx.mock
+async def test_accepting_a_group_invite_can_share_private_details(call):
+    route = respx.post(f"{API}/api/v1/group-invites/received/8/accept").mock(
+        return_value=ok({"group_id": 4})
+    )
+
+    joined = await call(
+        "wishlist_accept_group_invite", {"invite_id": 8, "share_private_details": True}
+    )
+
+    assert json.loads(route.calls.last.request.content) == {"share_private_details": True}
+    assert joined["share_private_details"] is True
+
+
+@respx.mock
+async def test_declining_a_group_invite_hits_its_own_endpoint(call):
+    route = respx.post(f"{API}/api/v1/group-invites/received/8/decline").mock(
+        return_value=ok(None)
+    )
+
+    declined = await call("wishlist_decline_group_invite", {"invite_id": 8})
+
+    assert route.called
+    assert declined == {"declined": True, "invite_id": 8}
+
+
+@respx.mock
+async def test_a_group_invite_refusal_reaches_the_model_as_a_sentence(call):
+    respx.post(f"{API}/api/v1/group-invites/received/8/accept").mock(
+        return_value=err(
+            403,
+            "invite_email_mismatch",
+            "This invite was sent to a different email address.",
+        )
+    )
+
+    with pytest.raises(ToolError) as excinfo:
+        await call("wishlist_accept_group_invite", {"invite_id": 8})
+
+    assert "different email address" in str(excinfo.value)
+
+
+async def test_the_group_tools_carry_the_right_annotations():
+    async with Client(build_server()) as client:
+        tools = {t.name: t for t in await client.list_tools()}
+
+    for name in (
+        "wishlist_list_groups",
+        "wishlist_get_group",
+        "wishlist_get_group_member_wishlist",
+        "wishlist_list_group_events",
+        "wishlist_list_group_invites",
+    ):
+        assert tools[name].annotations.readOnlyHint is True, name
+    for name in ("wishlist_accept_group_invite", "wishlist_decline_group_invite"):
+        assert tools[name].annotations.readOnlyHint is False, name
+        assert tools[name].annotations.destructiveHint is False, name
+
+
+# --- item audience -----------------------------------------------------------
+
+
+@respx.mock
+async def test_adding_an_item_sends_the_audience_and_reads_it_back(call):
+    audience = {"everyone": False, "circle": False, "group_ids": [4]}
+    route = respx.post(f"{API}/api/v1/wishlists/mine/items").mock(
+        return_value=ok(
+            {"id": 9, "name": "Socks", "visibility": "circle_only", "audience": audience}
+        )
+    )
+
+    result = await call(
+        "wishlist_add_item", {"name": "Socks", "audience": {"group_ids": [4]}}
+    )
+
+    sent = json.loads(route.calls.last.request.content)
+    assert sent["audience"] == audience
+    assert result["audience"] == audience
+    assert result["visibility"] == "circle_only"
+
+
+@respx.mock
+async def test_updating_an_item_sends_only_the_audience_it_was_given(call):
+    audience = {"everyone": False, "circle": True, "group_ids": [4, 5]}
+    route = respx.patch(f"{API}/api/v1/wishlists/mine/items/7").mock(
+        return_value=ok(
+            {"id": 7, "name": "Socks", "visibility": "circle_only", "audience": audience}
+        )
+    )
+
+    result = await call("wishlist_update_item", {"item_id": 7, "audience": audience})
+
+    assert json.loads(route.calls.last.request.content) == {"audience": audience}
+    assert result["audience"] == audience
+
+
+@respx.mock
+async def test_an_update_without_audience_sends_none(call):
+    """Leaving audience out must not send a null that resets who sees the item."""
+    route = respx.patch(f"{API}/api/v1/wishlists/mine/items/7").mock(
+        return_value=ok({"id": 7, "name": "Socks", "visibility": "circle_only"})
+    )
+
+    await call("wishlist_update_item", {"item_id": 7, "visibility": "circle_only"})
+
+    assert json.loads(route.calls.last.request.content) == {"visibility": "circle_only"}
+
+
+@respx.mock
+async def test_an_invalid_audience_is_refused_by_the_api_in_its_own_words(call):
+    respx.post(f"{API}/api/v1/wishlists/mine/items").mock(
+        return_value=err(
+            422, "invalid_audience", "You can only share items with your own groups."
+        )
+    )
+
+    with pytest.raises(ToolError) as excinfo:
+        await call(
+            "wishlist_add_item", {"name": "Socks", "audience": {"group_ids": [99]}}
+        )
+
+    assert "your own groups" in str(excinfo.value)
+
+
+@respx.mock
+async def test_my_wishlist_items_carry_their_audience(call):
+    audience = {"everyone": True, "circle": False, "group_ids": []}
+    respx.get(f"{API}/api/v1/wishlists/mine").mock(
+        return_value=ok(
+            {
+                "items": [
+                    {
+                        "id": 1,
+                        "name": "Lamp",
+                        "visibility": "public",
+                        "audience": audience,
+                    }
+                ]
+            }
+        )
+    )
+
+    items = await call("wishlist_get_my_wishlist")
+
+    assert items[0]["audience"] == audience

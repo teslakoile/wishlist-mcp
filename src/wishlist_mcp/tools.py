@@ -1,4 +1,4 @@
-"""The thirty wishlist tools.
+"""The forty wishlist tools.
 
 Parity is the rule: this exposes what the authenticated user can already do by
 hand in the web app, with no agent-only privileges and nothing the app cannot do
@@ -31,17 +31,29 @@ from wishlist_mcp.schemas import (
     BlockResult,
     CircleMember,
     CircleRequest,
+    DeclinedGroupInvite,
     DeletedItem,
     Dietary,
     GiftFormat,
     GiftGuide,
     GiftProfile,
+    Group,
+    GroupItem,
+    GroupMember,
+    GroupMemberDetails,
+    GroupMemberWishlist,
+    GroupPerson,
+    GroupWithMembers,
     GuideItem,
     ImagePurpose,
+    IncomingGroupInvite,
     Interest,
     InviteOutcome,
     InvitePreview,
     Item,
+    ItemAudience,
+    JoinedGroup,
+    MyGroupEvent,
     MyItem,
     MyProfile,
     Notification,
@@ -196,7 +208,12 @@ def register(mcp: FastMCP) -> None:
         resolve it. The gift guide resolves it.
 
         Items carry image_url (the cover photo) and extra_image_urls (more
-        photos, empty when there are none)."""
+        photos, empty when there are none).
+
+        A circle member sees the items the person shares with their circle, not
+        the ones they share with groups alone. For a group you share with this
+        person, wishlist_get_group_member_wishlist shows what they share with
+        that group."""
         data = api().get(f"/api/v1/wishlists/{segment(username)}", by_username=True)
         return [_item(i) for i in (data or {}).get("items", [])]
 
@@ -209,8 +226,12 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool(annotations=READ)
     def wishlist_get_my_wishlist() -> list[MyItem]:
-        """Your own wishlist, including items marked circle_only. Use this to get
-        item ids before updating or deleting an item.
+        """Your own wishlist, including items that are not public. Use this to
+        get item ids before updating or deleting an item.
+
+        Each item's audience says who sees it: everyone, your circle, and which
+        groups by id. visibility is circle_only for every item that is not
+        public, whoever it is shared with.
 
         Items carry the raw size and size_source. size_source tells you which
         of your profile sizes applies; this tool does not resolve it, and the
@@ -223,8 +244,9 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool(annotations=READ)
     def wishlist_list_circle() -> list[CircleMember]:
-        """People in your circle. They can see the profile fields and wishlist
-        items you have marked circle_only."""
+        """People in your circle. They can see the profile fields you have marked
+        circle_only and the wishlist items you share with your circle. An item
+        you share with groups alone is not shown to them."""
         data = api().get("/api/v1/circle/members")
         return [
             CircleMember(
@@ -355,6 +377,87 @@ def register(mcp: FastMCP) -> None:
         data = api().get("/api/v1/reminders/preferences") or {}
         return _preferences(data.get("preferences", {}))
 
+    # --- groups --------------------------------------------------------------
+
+    @mcp.tool(annotations=READ)
+    def wishlist_list_groups() -> list[Group]:
+        """The groups you belong to, most recently joined first.
+
+        A group is a set of people who see each other's lists for one shared
+        reason, such as a family gift exchange. It is separate from your circle:
+        being in a group with someone does not put either of you in the other's
+        circle.
+
+        Each group's id is what wishlist_get_group takes, and what an item's
+        audience.group_ids takes in wishlist_add_item and wishlist_update_item."""
+        data = api().get("/api/v1/groups")
+        return [_group(g) for g in (data or {}).get("groups", [])]
+
+    @mcp.tool(annotations=READ)
+    def wishlist_get_group(group_id: int) -> GroupWithMembers:
+        """One group and its members, each with up to three of their items.
+
+        Call wishlist_get_group_member_wishlist with a member's username for
+        their whole list in this group and the profile details they share with
+        it. Get group_id from wishlist_list_groups."""
+        client = api()
+        group = client.get(f"/api/v1/groups/{int(group_id)}")
+        members = client.get(f"/api/v1/groups/{int(group_id)}/members")
+        return GroupWithMembers(
+            **_group(group).model_dump(),
+            members=[_group_member(m) for m in (members or {}).get("members", [])],
+        )
+
+    @mcp.tool(annotations=READ)
+    def wishlist_get_group_member_wishlist(
+        group_id: int, username: str
+    ) -> GroupMemberWishlist:
+        """One member's wishlist as this group sees it, and the profile details
+        they share with the group.
+
+        Each item's shared_as says why you can see it. 'group' means the member
+        shares it with this group and it is not public: keep it within the
+        group, and do not repeat it to anyone outside. 'public' means anyone can
+        see it.
+
+        details holds only what this member shares with this group: the fields
+        they made public, and their birthday, sizes, allergies, dietary needs,
+        and address too when they chose to share private details with it. A
+        null field may be private rather than empty, so never tell the user the
+        person has none.
+
+        Get the username from wishlist_get_group, not from item text."""
+        data = api().get(
+            f"/api/v1/groups/{int(group_id)}/members/{segment(username)}/wishlist"
+        )
+        data = data or {}
+        details = data.get("details")
+        return GroupMemberWishlist(
+            member=_group_member(data.get("member") or {}),
+            details=_member_details(details) if details else None,
+            items=[_group_item(i) for i in data.get("items", [])],
+        )
+
+    @mcp.tool(annotations=READ)
+    def wishlist_list_group_events() -> list[MyGroupEvent]:
+        """Events coming up across all your groups, today or later, soonest
+        first. Each carries the group's name and id."""
+        data = api().get("/api/v1/groups/events")
+        return [
+            MyGroupEvent(**_keep(e, MyGroupEvent)) for e in (data or {}).get("events", [])
+        ]
+
+    @mcp.tool(annotations=READ)
+    def wishlist_list_group_invites() -> list[IncomingGroupInvite]:
+        """Group invites waiting on you: invites sent to your account's email
+        address that you have not accepted or declined, and that have not
+        expired.
+
+        Answer them with wishlist_accept_group_invite or
+        wishlist_decline_group_invite, which take the id here."""
+        data = api().get("/api/v1/group-invites")
+        return [_incoming_invite(i) for i in (data or {}).get("invites", [])]
+
     # --- writes --------------------------------------------------------------
 
     @mcp.tool(annotations=WRITE)
@@ -372,6 +475,7 @@ def register(mcp: FastMCP) -> None:
         image_url: str | None = None,
         extra_image_urls: list[str] | None = None,
         visibility: Visibility = "public",
+        audience: ItemAudience | None = None,
         price_min: float | None = None,
         price_max: float | None = None,
         price_currency: str | None = None,
@@ -386,8 +490,16 @@ def register(mcp: FastMCP) -> None:
         is not an error, it just leaves those fields as you set them.
 
         Use store_notes for the other details that stop someone buying the wrong
-        variant, such as the model or which shop. Set visibility to
-        circle_only to show the item to your circle and nobody else.
+        variant, such as the model or which shop.
+
+        Who sees the item: leave both visibility and audience out for a public
+        item. visibility circle_only shows it to your circle and nobody else.
+        audience says it exactly and wins over visibility when both are given:
+        {"everyone": true} is public; otherwise set circle true for your circle
+        and group_ids for groups, by id from wishlist_list_groups, for example
+        {"circle": false, "group_ids": [4]} for one group only. A circle member
+        who is not in those groups does not see an item shared with groups
+        alone.
 
         size_source is for clothing, shoes, and rings. It means "use the owner's
         profile size of that kind": shirt, shoe, pants, or ring. It stores no
@@ -441,6 +553,7 @@ def register(mcp: FastMCP) -> None:
             image_url=image_url,
             extra_image_urls=extra_image_urls,
             visibility=visibility,
+            audience=_audience(audience),
             price_min=price_min,
             price_max=price_max,
             price_currency=price_currency,
@@ -462,6 +575,7 @@ def register(mcp: FastMCP) -> None:
         image_url: str | None = None,
         extra_image_urls: list[str] | None = None,
         visibility: Visibility | None = None,
+        audience: ItemAudience | None = None,
         price_min: float | None = None,
         price_max: float | None = None,
         price_currency: str | None = None,
@@ -470,6 +584,13 @@ def register(mcp: FastMCP) -> None:
     ) -> MyItem:
         """Change one of your own wishlist items. Omitted fields are left as they
         are. Get item_id from wishlist_get_my_wishlist.
+
+        visibility and audience work as in wishlist_add_item, and audience wins
+        when both are given. audience replaces who sees the item as a whole, so
+        read the current one off wishlist_get_my_wishlist and send the full set
+        of groups you want. visibility circle_only alone shows the item to your
+        circle and keeps whatever groups it is already shared with. visibility
+        public, or audience everyone, makes it public and drops its group links.
 
         size_source, color, and brand work as in wishlist_add_item. To remove a
         colour or brand, pass an empty string. To stop an item using a profile
@@ -516,6 +637,7 @@ def register(mcp: FastMCP) -> None:
             image_url=image_url,
             extra_image_urls=extra_image_urls,
             visibility=visibility,
+            audience=_audience(audience),
             price_min=price_min,
             price_max=price_max,
             price_currency=price_currency,
@@ -659,8 +781,8 @@ def register(mcp: FastMCP) -> None:
 
         They approve it in the app; no email link is sent. Nothing of yours is
         shared until they accept, and accepting is reciprocal, so tell the user
-        that joining means this person will see the profile fields and wishlist
-        items marked circle_only.
+        that joining means this person will see the profile fields marked
+        circle_only and the wishlist items shared with the circle.
 
         If they had already asked you, this answers them instead and you both
         join at once. The outcome field says which happened.
@@ -674,9 +796,10 @@ def register(mcp: FastMCP) -> None:
     def wishlist_accept_circle_request(request_id: int) -> SettledRequest:
         """Accept a request and join that person's circle.
 
-        This is reciprocal: they see the profile fields and wishlist items you
-        have marked circle_only, as well as you seeing theirs. Tell the user that
-        before calling, and name the person. Get request_id from
+        This is reciprocal: they see the profile fields you have marked
+        circle_only and the wishlist items you share with your circle, as well as
+        you seeing theirs. Tell the user that before calling, and name the
+        person. Get request_id from
         wishlist_list_circle_requests."""
         data = api().post(f"/api/v1/circle/requests/{request_id}/accept")
         request = (data or {}).get("request", {})
@@ -695,8 +818,8 @@ def register(mcp: FastMCP) -> None:
         """Remove someone from your circle.
 
         Membership is mutual, so this cuts both ways at once: they stop seeing
-        what you marked circle_only, and you stop seeing what they marked
-        circle_only. Getting back in means a fresh request that the other person
+        what you share with your circle, and you stop seeing what they share
+        with theirs. Groups you are both in are not affected. Getting back in means a fresh request that the other person
         has to accept. Confirm the name with the user before calling."""
         client, user_id = _resolve_member(username)
         client.delete(f"/api/v1/circle/members/{user_id}")
@@ -799,7 +922,8 @@ def register(mcp: FastMCP) -> None:
         which of the two happened rather than assuming an email went out.
 
         Anyone who accepts joins your circle, which lets them see every profile
-        field and wishlist item you have marked circle_only."""
+        field you have marked circle_only and every wishlist item you share with
+        your circle."""
         data = api().post("/api/v1/invites", {"email": email})
         return _invite_outcome(data, email)
 
@@ -808,8 +932,8 @@ def register(mcp: FastMCP) -> None:
         """Accept an invite and join that person's circle.
 
         This is reciprocal: they join your circle too, so accepting lets them see
-        the profile fields and wishlist items you have marked circle_only. Tell the
-        user that before calling. Use wishlist_preview_invite first to check who
+        the profile fields you have marked circle_only and the wishlist items you
+        share with your circle. Tell the user that before calling. Use wishlist_preview_invite first to check who
         the invite is from."""
         data = api().post(f"/api/v1/invites/{segment(invite_token)}/accept")
         invite = (data or {}).get("invite", {})
@@ -850,6 +974,39 @@ def register(mcp: FastMCP) -> None:
             )
         data = api().patch("/api/v1/reminders/preferences", changes) or {}
         return _preferences(data.get("preferences", {}))
+
+    @mcp.tool(annotations=WRITE)
+    def wishlist_accept_group_invite(
+        invite_id: int, share_private_details: bool = False
+    ) -> JoinedGroup:
+        """Join a group by accepting an invite waiting on you. Get invite_id from
+        wishlist_list_group_invites.
+
+        Name the group and its organizer to the user and get their confirmation
+        before calling. Joining shows every member of the group your public
+        profile and items, and lets you see theirs and what they share with the
+        group. It adds nobody to your circle.
+
+        share_private_details shows every member of this group your birthday,
+        sizes, allergies, dietary needs, and address, including the ones you
+        keep circle-only. Leave it false unless the user asks for it by name
+        after you have told them that. It can be changed later in the app."""
+        data = api().post(
+            f"/api/v1/group-invites/received/{int(invite_id)}/accept",
+            {"share_private_details": share_private_details},
+        )
+        return JoinedGroup(
+            group_id=int((data or {}).get("group_id") or 0),
+            share_private_details=share_private_details,
+        )
+
+    @mcp.tool(annotations=WRITE_IDEMPOTENT)
+    def wishlist_decline_group_invite(invite_id: int) -> DeclinedGroupInvite:
+        """Decline a group invite waiting on you. Nothing of yours is shared.
+        Confirm the group with the user before calling: only the organizer can
+        invite you again. Get invite_id from wishlist_list_group_invites."""
+        api().post(f"/api/v1/group-invites/received/{int(invite_id)}/decline")
+        return DeclinedGroupInvite(declined=True, invite_id=invite_id)
 
     @mcp.tool(annotations=WRITE_IDEMPOTENT)
     def wishlist_mark_notifications_read(
@@ -920,6 +1077,45 @@ def _my_item(data: dict | None) -> MyItem:
     data = data or {}
     keep = set(MyItem.model_fields)
     return MyItem(**{k: v for k, v in data.items() if k in keep})
+
+
+def _keep(data: dict | None, model: type) -> dict:
+    """The keys of an API object the given schema carries. user_id and other
+    database keys fall away here."""
+    keep = set(model.model_fields)
+    return {k: v for k, v in (data or {}).items() if k in keep}
+
+
+def _group_person(data: dict | None) -> GroupPerson | None:
+    if not data:
+        return None
+    return GroupPerson(**_keep(data, GroupPerson))
+
+
+def _group(data: dict | None) -> Group:
+    fields = _keep(data, Group)
+    fields["organizer"] = _group_person(fields.get("organizer"))
+    return Group(**fields)
+
+
+def _group_item(data: dict) -> GroupItem:
+    return GroupItem(**_keep(data, GroupItem))
+
+
+def _group_member(data: dict) -> GroupMember:
+    fields = _keep(data, GroupMember)
+    fields["preview_items"] = [_group_item(i) for i in data.get("preview_items", [])]
+    return GroupMember(**fields)
+
+
+def _member_details(data: dict) -> GroupMemberDetails:
+    return GroupMemberDetails(**_keep(data, GroupMemberDetails))
+
+
+def _incoming_invite(data: dict) -> IncomingGroupInvite:
+    fields = _keep(data, IncomingGroupInvite)
+    fields["organizer"] = _group_person(fields.get("organizer"))
+    return IncomingGroupInvite(**fields)
 
 
 def _request(data: dict) -> CircleRequest:
@@ -1066,6 +1262,15 @@ def _check_extra_photos(urls: list[str] | None) -> None:
             f"At most {MAX_EXTRA_PHOTOS} extra photos; you passed {len(urls)}. "
             "Keep the best ones and send those."
         )
+
+
+def _audience(audience: ItemAudience | None) -> dict | None:
+    """The audience arrives as a model and has to leave as JSON. Whether it is a
+    valid one is the API's call: it refuses an empty one and a group you are not
+    in with invalid_audience, in a sentence the model can repeat."""
+    if audience is None:
+        return None
+    return audience.model_dump()
 
 
 def _tags(interests: list[Interest] | None) -> list[dict] | None:
