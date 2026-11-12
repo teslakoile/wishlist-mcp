@@ -43,7 +43,7 @@ consent screen; it only verifies what AuthKit signed.
 
 ## The tools
 
-Thirty-three, one per thing you can already do by hand in the web app. Parity is
+Forty, one per thing you can already do by hand in the web app. Parity is
 the rule: no agent-only privileges, and nothing the app itself cannot do.
 
 | Tool | Kind |
@@ -63,6 +63,11 @@ the rule: no agent-only privileges, and nothing the app itself cannot do.
 | `wishlist_upcoming_occasions` | read |
 | `wishlist_list_notifications` | read |
 | `wishlist_get_reminder_preferences` | read |
+| `wishlist_list_groups` | read |
+| `wishlist_get_group` | read |
+| `wishlist_get_group_member_wishlist` | read |
+| `wishlist_list_group_events` | read |
+| `wishlist_list_group_invites` | read |
 | `wishlist_add_item` | write |
 | `wishlist_update_item` | write |
 | `wishlist_upload_image` | write |
@@ -77,6 +82,8 @@ the rule: no agent-only privileges, and nothing the app itself cannot do.
 | `wishlist_send_nudge` | write |
 | `wishlist_answer_nudge` | write |
 | `wishlist_dismiss_nudge` | write |
+| `wishlist_accept_group_invite` | write |
+| `wishlist_decline_group_invite` | write |
 | `wishlist_create_invite` | **destructive** |
 | `wishlist_delete_item` | **destructive** |
 | `wishlist_remove_circle_member` | **destructive** |
@@ -116,6 +123,30 @@ irreversible actions will ask first. Sending an invite emails a real person and 
 unsent. Accepting a request or an invite is reciprocal: the other person gains access to
 your circle-only fields as well as you gaining access to theirs. Removing a member cuts
 both ways at once, and getting back in needs a fresh request they have to accept.
+
+### Groups
+
+A group is a set of people who see each other's lists for one shared reason, and it is
+separate from the circle: joining one adds nobody to anyone's circle. The five group reads
+list your groups, show one group with its members and a three-item preview of each, show
+one member's list as that group sees it, list upcoming group events, and list the group
+invites waiting on you. Each item a group shows carries `shared_as`, `group` or
+`public`, and a member's `details` holds only the profile fields they share with that
+group.
+
+`wishlist_accept_group_invite` and `wishlist_decline_group_invite` answer an invite by
+the id the list returns. Accepting takes `share_private_details`, false by default, which
+shows every member of the group your birthday, sizes, allergies, dietary needs, and
+address.
+
+Items you own carry `audience`: `everyone`, `circle`, and `group_ids`.
+`wishlist_add_item` and `wishlist_update_item` take it, and it wins over `visibility`.
+`visibility: circle_only` on its own keeps an item's group links, and making an item
+public drops them. A circle member does not see an item shared with groups alone.
+
+Organizer actions (creating, renaming, or deleting a group, inviting, removing members,
+handing off the role, leaving, the per-group share switch, and events) are left to the
+web app for the first release.
 
 ### Photos
 

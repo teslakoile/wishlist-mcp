@@ -259,8 +259,39 @@ class Item(BaseModel):
     )
 
 
+class ItemAudience(BaseModel):
+    """Who sees one of your own items. Sent to wishlist_add_item and
+    wishlist_update_item, and read back on every item of your own."""
+
+    everyone: bool = Field(
+        False,
+        description="True makes the item public. circle and group_ids are then "
+        "ignored and come back as false and [].",
+    )
+    circle: bool = Field(
+        False,
+        description="True shows the item to everyone in your circle.",
+    )
+    group_ids: list[int] = Field(
+        default_factory=list,
+        description="Groups that see the item, by id from wishlist_list_groups. "
+        "Only groups you belong to. A member of one of these groups sees the item "
+        "inside that group only, and a circle member who is not in it does not "
+        "see it at all unless circle is also true.",
+    )
+
+
 class MyItem(Item):
-    visibility: Visibility
+    visibility: Visibility = Field(
+        description="'public' when audience.everyone is true, else 'circle_only'. "
+        "circle_only alone does not say who sees the item: read audience for that."
+    )
+    audience: ItemAudience | None = Field(
+        None,
+        description="Who sees this item. Everyone false, circle false, and "
+        "group_ids empty means only you, which happens after you leave the last "
+        "group the item was shared with.",
+    )
 
 
 class GuideItem(Item):
@@ -285,6 +316,152 @@ class GiftGuide(BaseModel):
         "does not tell you this on its own: it also happens when the person hides "
         "nothing from anyone."
     )
+
+
+SharedAs = Literal["group", "public"]
+GroupRole = Literal["organizer", "member"]
+
+
+class GroupItem(Item):
+    """A wishlist item as a group shows it."""
+
+    shared_as: SharedAs = Field(
+        description="'group' means the owner shares this item with this group and "
+        "it is not public: keep it inside the group, and do not mention it to "
+        "anyone outside it. 'public' means anyone can see it."
+    )
+
+
+class GroupPerson(BaseModel):
+    username: str
+    display_name: str | None = Field(
+        None,
+        description="Null when the person hides their display name from you.",
+    )
+    avatar_url: str | None = None
+
+
+class GroupEvent(BaseModel):
+    """A date a group's organizer set, such as a gift exchange."""
+
+    id: int
+    group_id: int
+    name: str
+    date: str = Field(description="ISO-8601 date, today or later.")
+    time: str | None = Field(None, description="HH:MM, or null for all day.")
+
+
+class MyGroupEvent(GroupEvent):
+    group_name: str
+
+
+class Group(BaseModel):
+    """A group you belong to. Separate from your circle: joining a group adds
+    nobody to anyone's circle."""
+
+    id: int = Field(
+        description="Pass this to wishlist_get_group, or in an item's "
+        "audience.group_ids to share that item with this group."
+    )
+    name: str
+    icon_url: str | None = None
+    organizer: GroupPerson | None = None
+    member_count: int = Field(
+        description="Everyone in the group, you included. It can be higher than "
+        "the members you are shown."
+    )
+    my_role: GroupRole
+    share_private_details: bool = Field(
+        description="Whether you show this group your circle-only profile fields: "
+        "birthday, sizes, allergies, dietary needs, and address."
+    )
+    events: list[GroupEvent] = Field(
+        default_factory=list, description="Today or later, soonest first."
+    )
+    created_at: str = Field(description="ISO-8601 UTC.")
+
+
+class GroupMember(GroupPerson):
+    role: GroupRole
+    joined_at: str = Field(description="ISO-8601 UTC.")
+    group_item_count: int = Field(
+        description="Items this person shares with this group and nobody public."
+    )
+    public_item_count: int
+    shares_private_details: bool = Field(
+        description="Whether this person shows the group their circle-only "
+        "profile fields."
+    )
+    preview_items: list[GroupItem] = Field(
+        default_factory=list,
+        description="At most 3, group items first. Call "
+        "wishlist_get_group_member_wishlist for the whole list.",
+    )
+
+
+class GroupWithMembers(Group):
+    members: list[GroupMember] = Field(
+        description="Organizer first, then by when they joined. You are in it. "
+        "Someone who has blocked you is left out."
+    )
+
+
+class GroupMemberDetails(BaseModel):
+    """The profile fields a group shows. Each one is null when the member keeps
+    it from this group, or has not filled it in."""
+
+    birthday: Birthday | None = Field(
+        None, description="Month and day only. Do not state or infer an age."
+    )
+    shirt_size: str | None = None
+    shoe_size: str | None = None
+    pants_size: str | None = None
+    ring_size: str | None = None
+    allergies: str | None = Field(
+        None,
+        description="Free text, and it answers harm. Read it before suggesting "
+        "anything consumable.",
+    )
+    dietary: list[Dietary] | None = None
+    address: str | None = Field(
+        None, description="One line, joined from the address fields."
+    )
+
+
+class GroupMemberWishlist(BaseModel):
+    member: GroupMember
+    details: GroupMemberDetails | None = Field(
+        None,
+        description="Only what this member shares with this group: fields they "
+        "made public, plus their circle-only fields when shares_private_details is "
+        "true or you are in their circle. Null when nothing is shown. A null field "
+        "is not evidence they have none.",
+    )
+    items: list[GroupItem] = Field(
+        description="Group items first, then public ones, each in the owner's order."
+    )
+
+
+class IncomingGroupInvite(BaseModel):
+    """An invite to a group, waiting on you."""
+
+    id: int = Field(description="Pass this to accept or decline.")
+    group_id: int
+    group_name: str
+    group_icon_url: str | None = None
+    organizer: GroupPerson | None = None
+    member_count: int
+    sent_at: str = Field(description="ISO-8601 UTC.")
+
+
+class JoinedGroup(BaseModel):
+    group_id: int = Field(description="Pass this to wishlist_get_group.")
+    share_private_details: bool
+
+
+class DeclinedGroupInvite(BaseModel):
+    declined: bool
+    invite_id: int
 
 
 class CircleMember(BaseModel):
