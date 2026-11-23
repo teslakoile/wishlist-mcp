@@ -464,6 +464,93 @@ class DeclinedGroupInvite(BaseModel):
     invite_id: int
 
 
+GroupInviteStatus = Literal["pending", "declined", "expired"]
+GroupInviteResult = Literal[
+    "sent",
+    "already_member",
+    "already_invited",
+    "invalid_email",
+    "over_daily_limit",
+    "email_failed",
+]
+
+
+class InviteAllowance(BaseModel):
+    remaining_today: int = Field(
+        description="Invites you can still send today. Circle invites, circle "
+        "requests, and group invites share this one count, which resets at "
+        "midnight UTC."
+    )
+    daily_limit: int
+
+
+class SentGroupInvite(BaseModel):
+    """An invite you sent as organizer that is still open."""
+
+    id: int = Field(description="Pass this to resend or cancel the invite.")
+    email: str
+    status: GroupInviteStatus
+    has_account: bool = Field(
+        description="Whether the address belongs to a wishlist account."
+    )
+    email_failed: bool = Field(
+        description="True when the last email did not send, so the person never "
+        "got it. Resend it."
+    )
+    sent_at: str = Field(description="ISO-8601 UTC.")
+    expires_at: str = Field(description="ISO-8601 UTC.")
+
+
+class SentGroupInvites(BaseModel):
+    invites: list[SentGroupInvite] = Field(
+        description="Pending, declined, and expired invites. Accepted and "
+        "cancelled ones are not listed."
+    )
+    allowance: InviteAllowance
+
+
+class GroupInviteOutcome(BaseModel):
+    email: str
+    outcome: GroupInviteResult = Field(
+        description="'sent' and 'email_failed' made an invite and used one of "
+        "today's allowance. 'email_failed' means the email did not go out: resend "
+        "it later. Every other outcome sent nothing."
+    )
+
+
+class GroupInviteBatchResult(BaseModel):
+    results: list[GroupInviteOutcome] = Field(
+        description="One per address, in the order you sent them, duplicates collapsed."
+    )
+    allowance: InviteAllowance
+
+
+class DeletedGroup(BaseModel):
+    deleted: bool
+    group_id: int
+
+
+class LeftGroup(BaseModel):
+    left: bool
+    group_id: int
+
+
+class RemovedGroupMember(BaseModel):
+    removed: bool
+    group_id: int
+    username: str
+
+
+class CancelledGroupInvite(BaseModel):
+    cancelled: bool
+    invite_id: int
+
+
+class DeletedGroupEvent(BaseModel):
+    deleted: bool
+    event_id: int
+
+
 class CircleMember(BaseModel):
     """Someone in your circle.
 
