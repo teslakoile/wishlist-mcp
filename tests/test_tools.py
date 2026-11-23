@@ -1,4 +1,4 @@
-"""The forty tools, driven through a real MCP client with the wishlist API stubbed.
+"""The fifty-four tools, driven through a real MCP client with the wishlist API stubbed.
 
 What these check is this server's own job: shaping requests, shaping responses,
 and turning API errors into sentences a model can act on. The visibility and
@@ -101,6 +101,20 @@ async def test_every_tool_in_the_contract_is_present():
         "wishlist_list_group_invites",
         "wishlist_accept_group_invite",
         "wishlist_decline_group_invite",
+        "wishlist_create_group",
+        "wishlist_update_group",
+        "wishlist_delete_group",
+        "wishlist_update_my_group_settings",
+        "wishlist_leave_group",
+        "wishlist_remove_group_member",
+        "wishlist_hand_off_group_organizer",
+        "wishlist_list_group_sent_invites",
+        "wishlist_invite_to_group",
+        "wishlist_resend_group_invite",
+        "wishlist_cancel_group_invite",
+        "wishlist_add_group_event",
+        "wishlist_update_group_event",
+        "wishlist_delete_group_event",
     }
 
 
@@ -115,6 +129,14 @@ async def test_the_irreversible_tools_are_marked_destructive():
         "wishlist_delete_item",
         "wishlist_remove_circle_member",
         "wishlist_block_user",
+        "wishlist_delete_group",
+        "wishlist_leave_group",
+        "wishlist_remove_group_member",
+        "wishlist_hand_off_group_organizer",
+        "wishlist_invite_to_group",
+        "wishlist_resend_group_invite",
+        "wishlist_cancel_group_invite",
+        "wishlist_delete_group_event",
     ):
         assert tools[name].annotations.destructiveHint is True, name
     assert tools["wishlist_add_item"].annotations.destructiveHint is False
@@ -2498,6 +2520,282 @@ async def test_the_group_tools_carry_the_right_annotations():
     for name in ("wishlist_accept_group_invite", "wishlist_decline_group_invite"):
         assert tools[name].annotations.readOnlyHint is False, name
         assert tools[name].annotations.destructiveHint is False, name
+
+
+# --- running a group ---------------------------------------------------------
+
+ORGANIZED = {**GROUP, "my_role": "organizer", "organizer": ORGANIZER}
+BOB = {
+    **MEMBER,
+    "user_id": 2,
+    "username": "bob",
+    "display_name": "Bob",
+    "role": "member",
+    "preview_items": [],
+}
+SENT_INVITE = {
+    "id": 9,
+    "group_id": 4,
+    "email": "carol@example.com",
+    "status": "pending",
+    "has_account": False,
+    "email_failed": False,
+    "sent_at": "2026-11-20T10:00:00Z",
+    "expires_at": "2026-12-04T10:00:00Z",
+}
+ALLOWANCE = {"remaining_today": 28, "daily_limit": 30}
+
+
+@respx.mock
+async def test_creating_a_group_sends_only_what_was_given(call):
+    route = respx.post(f"{API}/api/v1/groups").mock(
+        return_value=httpx.Response(201, json={"data": ORGANIZED})
+    )
+
+    group = await call("wishlist_create_group", {"name": "Family"})
+
+    assert json.loads(route.calls.last.request.content) == {"name": "Family"}
+    assert group["my_role"] == "organizer"
+    assert "user_id" not in group["organizer"]
+
+
+@respx.mock
+async def test_clearing_a_group_icon_sends_an_explicit_null(call):
+    route = respx.patch(f"{API}/api/v1/groups/4").mock(return_value=ok(ORGANIZED))
+
+    await call("wishlist_update_group", {"group_id": 4, "clear_icon": True})
+
+    assert json.loads(route.calls.last.request.content) == {"icon_url": None}
+
+
+async def test_updating_a_group_with_nothing_to_change_calls_nothing(call):
+    with respx.mock(assert_all_called=False) as mock:
+        route = mock.route()
+        with pytest.raises(ToolError, match="Nothing to change"):
+            await call("wishlist_update_group", {"group_id": 4})
+        with pytest.raises(ToolError, match="not both"):
+            await call(
+                "wishlist_update_group",
+                {"group_id": 4, "icon_url": "https://x.test/a.png", "clear_icon": True},
+            )
+    assert not route.called
+
+
+@respx.mock
+async def test_deleting_a_group_reports_the_id(call):
+    route = respx.delete(f"{API}/api/v1/groups/4").mock(return_value=httpx.Response(204))
+
+    outcome = await call("wishlist_delete_group", {"group_id": 4})
+
+    assert route.called
+    assert outcome == {"deleted": True, "group_id": 4}
+
+
+@respx.mock
+async def test_the_share_switch_patches_my_settings_only(call):
+    route = respx.patch(f"{API}/api/v1/groups/4/me").mock(
+        return_value=ok({**GROUP, "share_private_details": True})
+    )
+
+    group = await call(
+        "wishlist_update_my_group_settings",
+        {"group_id": 4, "share_private_details": True},
+    )
+
+    assert json.loads(route.calls.last.request.content) == {"share_private_details": True}
+    assert group["share_private_details"] is True
+
+
+@respx.mock
+async def test_an_organizer_with_members_is_told_to_hand_off_before_leaving(call):
+    respx.post(f"{API}/api/v1/groups/4/leave").mock(
+        return_value=err(
+            409,
+            "organizer_must_hand_off",
+            "Hand the organizer role to someone else before you leave.",
+        )
+    )
+
+    with pytest.raises(ToolError, match="Hand the organizer role"):
+        await call("wishlist_leave_group", {"group_id": 4})
+
+
+@respx.mock
+async def test_removing_a_group_member_deletes_by_the_id_their_username_resolves_to(
+    call,
+):
+    respx.get(f"{API}/api/v1/groups/4/members").mock(
+        return_value=ok({"members": [MEMBER, BOB]})
+    )
+    delete = respx.delete(f"{API}/api/v1/groups/4/members/2").mock(
+        return_value=httpx.Response(204)
+    )
+
+    outcome = await call(
+        "wishlist_remove_group_member", {"group_id": 4, "username": "bob"}
+    )
+
+    assert delete.called
+    assert outcome == {"removed": True, "group_id": 4, "username": "bob"}
+
+
+@respx.mock
+async def test_removing_someone_outside_the_group_deletes_nothing(call):
+    respx.get(f"{API}/api/v1/groups/4/members").mock(
+        return_value=ok({"members": [MEMBER, BOB]})
+    )
+    delete = respx.route(method="DELETE").mock(return_value=httpx.Response(204))
+
+    with pytest.raises(ToolError, match="not in this group"):
+        await call("wishlist_remove_group_member", {"group_id": 4, "username": "zed"})
+
+    assert not delete.called
+
+
+@respx.mock
+async def test_handing_off_sends_the_new_organizers_id(call):
+    respx.get(f"{API}/api/v1/groups/4/members").mock(
+        return_value=ok({"members": [MEMBER, BOB]})
+    )
+    route = respx.post(f"{API}/api/v1/groups/4/organizer").mock(
+        return_value=ok({**GROUP, "my_role": "member"})
+    )
+
+    group = await call(
+        "wishlist_hand_off_group_organizer", {"group_id": 4, "username": "bob"}
+    )
+
+    assert json.loads(route.calls.last.request.content) == {"user_id": 2}
+    assert group["my_role"] == "member"
+
+
+@respx.mock
+async def test_sent_invites_come_with_todays_allowance(call):
+    respx.get(f"{API}/api/v1/groups/4/invites").mock(
+        return_value=ok({"invites": [SENT_INVITE]})
+    )
+    respx.get(f"{API}/api/v1/groups/invite-allowance").mock(return_value=ok(ALLOWANCE))
+
+    result = await call("wishlist_list_group_sent_invites", {"group_id": 4})
+
+    assert [i["id"] for i in result["invites"]] == [9]
+    assert "group_id" not in result["invites"][0]
+    assert result["allowance"] == ALLOWANCE
+
+
+@respx.mock
+async def test_inviting_to_a_group_reports_each_addresss_outcome(call):
+    route = respx.post(f"{API}/api/v1/groups/4/invites").mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "data": {
+                    "results": [
+                        {"email": "carol@example.com", "outcome": "sent"},
+                        {"email": "bob@example.com", "outcome": "already_member"},
+                    ],
+                    "allowance": ALLOWANCE,
+                }
+            },
+        )
+    )
+
+    result = await call(
+        "wishlist_invite_to_group",
+        {"group_id": 4, "emails": [" carol@example.com ", "bob@example.com", " "]},
+    )
+
+    assert json.loads(route.calls.last.request.content) == {
+        "emails": ["carol@example.com", "bob@example.com"]
+    }
+    assert [r["outcome"] for r in result["results"]] == ["sent", "already_member"]
+    assert result["allowance"]["remaining_today"] == 28
+
+
+async def test_more_than_thirty_addresses_are_refused_before_any_email(call):
+    with respx.mock(assert_all_called=False) as mock:
+        route = mock.route()
+        with pytest.raises(ToolError, match="at most 30"):
+            await call(
+                "wishlist_invite_to_group",
+                {"group_id": 4, "emails": [f"p{n}@example.com" for n in range(31)]},
+            )
+        with pytest.raises(ToolError, match="at least one"):
+            await call("wishlist_invite_to_group", {"group_id": 4, "emails": []})
+    assert not route.called
+
+
+@respx.mock
+async def test_resending_and_cancelling_address_one_invite(call):
+    resend = respx.post(f"{API}/api/v1/groups/4/invites/9/resend").mock(
+        return_value=ok(SENT_INVITE)
+    )
+    cancel = respx.delete(f"{API}/api/v1/groups/4/invites/9").mock(
+        return_value=httpx.Response(204)
+    )
+
+    invite = await call("wishlist_resend_group_invite", {"group_id": 4, "invite_id": 9})
+    outcome = await call("wishlist_cancel_group_invite", {"group_id": 4, "invite_id": 9})
+
+    assert resend.called and cancel.called
+    assert invite["status"] == "pending"
+    assert outcome == {"cancelled": True, "invite_id": 9}
+
+
+@respx.mock
+async def test_a_member_calling_an_organizer_tool_gets_the_apis_refusal(call):
+    respx.post(f"{API}/api/v1/groups/4/events").mock(
+        return_value=err(403, "organizer_only", "Only the organizer can do that.")
+    )
+
+    with pytest.raises(ToolError, match="Only the organizer"):
+        await call(
+            "wishlist_add_group_event",
+            {"group_id": 4, "name": "Gift swap", "date": "2026-12-19"},
+        )
+
+
+@respx.mock
+async def test_adding_an_event_sends_an_all_day_time_as_null(call):
+    route = respx.post(f"{API}/api/v1/groups/4/events").mock(
+        return_value=httpx.Response(201, json={"data": EVENT})
+    )
+
+    event = await call(
+        "wishlist_add_group_event",
+        {"group_id": 4, "name": "Gift swap", "date": "2026-12-19"},
+    )
+
+    assert json.loads(route.calls.last.request.content) == {
+        "name": "Gift swap",
+        "date": "2026-12-19",
+        "time": None,
+    }
+    assert event["id"] == 3
+
+
+@respx.mock
+async def test_making_an_event_all_day_sends_only_a_null_time(call):
+    route = respx.patch(f"{API}/api/v1/groups/4/events/3").mock(return_value=ok(EVENT))
+
+    await call(
+        "wishlist_update_group_event",
+        {"group_id": 4, "event_id": 3, "all_day": True},
+    )
+
+    assert json.loads(route.calls.last.request.content) == {"time": None}
+
+
+@respx.mock
+async def test_deleting_an_event_reports_the_id(call):
+    route = respx.delete(f"{API}/api/v1/groups/4/events/3").mock(
+        return_value=httpx.Response(204)
+    )
+
+    outcome = await call("wishlist_delete_group_event", {"group_id": 4, "event_id": 3})
+
+    assert route.called
+    assert outcome == {"deleted": True, "event_id": 3}
 
 
 # --- item audience -----------------------------------------------------------

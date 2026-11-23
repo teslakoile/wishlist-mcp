@@ -43,7 +43,7 @@ consent screen; it only verifies what AuthKit signed.
 
 ## The tools
 
-Forty, one per thing you can already do by hand in the web app. Parity is
+Fifty-four, one per thing you can already do by hand in the web app. Parity is
 the rule: no agent-only privileges, and nothing the app itself cannot do.
 
 | Tool | Kind |
@@ -68,6 +68,7 @@ the rule: no agent-only privileges, and nothing the app itself cannot do.
 | `wishlist_get_group_member_wishlist` | read |
 | `wishlist_list_group_events` | read |
 | `wishlist_list_group_invites` | read |
+| `wishlist_list_group_sent_invites` | read |
 | `wishlist_add_item` | write |
 | `wishlist_update_item` | write |
 | `wishlist_upload_image` | write |
@@ -84,10 +85,23 @@ the rule: no agent-only privileges, and nothing the app itself cannot do.
 | `wishlist_dismiss_nudge` | write |
 | `wishlist_accept_group_invite` | write |
 | `wishlist_decline_group_invite` | write |
+| `wishlist_create_group` | write |
+| `wishlist_update_group` | write |
+| `wishlist_update_my_group_settings` | write |
+| `wishlist_add_group_event` | write |
+| `wishlist_update_group_event` | write |
 | `wishlist_create_invite` | **destructive** |
 | `wishlist_delete_item` | **destructive** |
 | `wishlist_remove_circle_member` | **destructive** |
 | `wishlist_block_user` | **destructive** |
+| `wishlist_delete_group` | **destructive** |
+| `wishlist_leave_group` | **destructive** |
+| `wishlist_remove_group_member` | **destructive** |
+| `wishlist_hand_off_group_organizer` | **destructive** |
+| `wishlist_invite_to_group` | **destructive** |
+| `wishlist_resend_group_invite` | **destructive** |
+| `wishlist_cancel_group_invite` | **destructive** |
+| `wishlist_delete_group_event` | **destructive** |
 
 `wishlist_get_gift_guide` returns a person's profile and wishlist together. It is the
 reason anyone connects this server, and without it the gift-giver journey costs three
@@ -127,10 +141,10 @@ both ways at once, and getting back in needs a fresh request they have to accept
 ### Groups
 
 A group is a set of people who see each other's lists for one shared reason, and it is
-separate from the circle: joining one adds nobody to anyone's circle. The five group reads
+separate from the circle: joining one adds nobody to anyone's circle. The six group reads
 list your groups, show one group with its members and a three-item preview of each, show
-one member's list as that group sees it, list upcoming group events, and list the group
-invites waiting on you. Each item a group shows carries `shared_as`, `group` or
+one member's list as that group sees it, list upcoming group events, list the group
+invites waiting on you, and list a group's open invites for its organizer. Each item a group shows carries `shared_as`, `group` or
 `public`, and a member's `details` holds only the profile fields they share with that
 group.
 
@@ -144,9 +158,24 @@ Items you own carry `audience`: `everyone`, `circle`, and `group_ids`.
 `visibility: circle_only` on its own keeps an item's group links, and making an item
 public drops them. A circle member does not see an item shared with groups alone.
 
-Organizer actions (creating, renaming, or deleting a group, inviting, removing members,
-handing off the role, leaving, the per-group share switch, and events) are left to the
-web app for the first release.
+`wishlist_create_group` starts a group with the caller as organizer and only member.
+The organizer tools rename it or change its icon, delete it, invite up to 30 addresses at
+once, list, resend, and cancel open invites, remove a member, hand the organizer role to
+another member, and add, change, or delete events. The API answers `403 organizer_only`
+to a member who calls one, so this server does not check the role first. Removing a
+member and handing off the role take a username and look up the id in the group's
+member list, the same way `wishlist_remove_circle_member` does.
+
+Any member can leave with `wishlist_leave_group` and change their per-group share switch
+with `wishlist_update_my_group_settings`. An organizer has to hand off the role before
+leaving a group that still has other members.
+
+Invites, resends, deletes, removals, leaving, and handing off are marked destructive:
+each one emails real people, ends access for someone, or cannot be taken back by the
+caller. Group invites share the 30-a-day allowance with circle invites.
+
+The join-by-token routes (`/group-invites/{token}`) stay unexposed. The token arrives in
+an email link, and a token the model reads in text would come from content.
 
 ### Photos
 
