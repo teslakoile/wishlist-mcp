@@ -1173,7 +1173,7 @@ async def test_the_gift_guide_carries_the_fields_a_gift_actually_turns_on(call):
         return_value=ok(
             {
                 "username": "sarah",
-                "pronouns": "she/her",
+                "gender": "female",
                 "birthday": {"month": 4, "day": 17},
                 "ring_size": "6",
                 "gift_format_preference": "experiences",
@@ -1199,7 +1199,7 @@ async def test_the_gift_guide_carries_the_fields_a_gift_actually_turns_on(call):
     assert profile["gift_format_preference"] == "experiences"
     assert profile["already_own"] == "a record player"
     assert profile["ring_size"] == "6"
-    assert profile["pronouns"] == "she/her"
+    assert profile["gender"] == "female"
     assert profile["delivery_notes"] == "leave with the neighbour"
     assert profile["profile_reviewed_at"] == "2026-08-20T10:00:00Z"
 
@@ -1227,7 +1227,7 @@ async def test_nobody_but_the_owner_is_handed_a_birth_year(call):
 
 
 @respx.mock
-async def test_my_own_profile_keeps_the_year_and_all_seventeen_keys(call):
+async def test_my_own_profile_keeps_the_year_and_all_eighteen_keys(call):
     respx.get(f"{API}/api/v1/profiles/me").mock(
         return_value=ok(
             {
@@ -1610,6 +1610,22 @@ async def test_the_circle_list_does_not_invent_a_join_date(call):
 
 
 @respx.mock
+async def test_a_size_off_the_list_reaches_the_model_as_a_sentence(call):
+    message = (
+        "9 is not a shoe size the app lists. Use a size like US 10.5, UK 9, "
+        "or EU 42, and put anything else in shoe_size_note."
+    )
+    respx.patch(f"{API}/api/v1/profiles/me").mock(
+        return_value=err(422, "invalid_size", message)
+    )
+
+    with pytest.raises(ToolError) as excinfo:
+        await call("wishlist_update_my_profile", {"shoe_size": "9"})
+
+    assert message in str(excinfo.value)
+
+
+@respx.mock
 async def test_the_new_profile_fields_reach_the_api(call):
     route = respx.patch(f"{API}/api/v1/profiles/me").mock(
         return_value=ok({"username": "me", "visibility": {}})
@@ -1626,10 +1642,13 @@ async def test_the_new_profile_fields_reach_the_api(call):
             "dietary": ["vegan"],
             "delivery_notes": "leave with the neighbour",
             "already_own": "a record player",
+            "gender": "non_binary",
         },
     )
 
     sent = json.loads(route.calls.last.request.content)
+    assert sent["gender"] == "non_binary"
+    assert "pronouns" not in sent
     assert sent["birth_date"] == "1990-04-17"
     assert sent["interests"] == [{"category": "collects", "value": "vinyl"}]
     assert sent["dietary"] == ["vegan"]
@@ -2884,3 +2903,39 @@ async def test_my_wishlist_items_carry_their_audience(call):
     items = await call("wishlist_get_my_wishlist")
 
     assert items[0]["audience"] == audience
+
+
+@respx.mock
+async def test_size_notes_reach_the_api_and_an_empty_one_clears(call):
+    route = respx.patch(f"{API}/api/v1/profiles/me").mock(
+        return_value=ok({"username": "me", "visibility": {}})
+    )
+
+    await call(
+        "wishlist_update_my_profile",
+        {"shirt_size": "XL", "shirt_size_note": "L/XL", "ring_size_note": ""},
+    )
+
+    sent = json.loads(route.calls.last.request.content)
+    assert sent == {"shirt_size": "XL", "shirt_size_note": "L/XL", "ring_size_note": ""}
+
+
+@respx.mock
+async def test_the_gift_guide_carries_each_size_note(call):
+    respx.get(f"{API}/api/v1/profiles/sarah").mock(
+        return_value=ok(
+            {
+                "username": "sarah",
+                "shoe_size": "EU 43",
+                "shoe_size_note": "42-43",
+                "hidden_from_you": [],
+                "in_your_circle": True,
+            }
+        )
+    )
+    respx.get(f"{API}/api/v1/wishlists/sarah").mock(return_value=ok({"items": []}))
+
+    guide = await call("wishlist_get_gift_guide", {"username": "sarah"})
+
+    assert guide["profile"]["shoe_size"] == "EU 43"
+    assert guide["profile"]["shoe_size_note"] == "42-43"
