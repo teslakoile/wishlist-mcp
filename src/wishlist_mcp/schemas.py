@@ -43,6 +43,7 @@ GiftFormat = Literal[
     "donations",
     "no_preference",
 ]
+Gender = Literal["female", "male", "non_binary", "other"]
 PriceComfort = Literal[
     "under_25",
     "under_50",
@@ -116,10 +117,11 @@ class GiftProfile(BaseModel):
     )
     display_name: str | None = None
     bio: str | None = None
-    pronouns: str | None = Field(
+    gender: Gender | None = Field(
         None,
-        description="Always visible, like the username. Use it when you write "
-        "about this person.",
+        description="Which cut their shirt, pants, and shoe sizes refer to. "
+        "Circle-only by default. It is not a pronoun: do not choose pronouns "
+        "from it, and use their name when you write about them.",
     )
     avatar_url: str | None = None
     birthday: Birthday | None = Field(
@@ -131,6 +133,21 @@ class GiftProfile(BaseModel):
     shoe_size: str | None = None
     pants_size: str | None = None
     ring_size: str | None = None
+    shirt_size_note: str | None = Field(
+        None,
+        description="Free text beside the shirt size, for what one size cannot "
+        "say, such as 'L/XL'. Read it with the size: it can change which size to "
+        "buy. Hidden whenever the size is.",
+    )
+    shoe_size_note: str | None = Field(
+        None, description="Free text beside the shoe size. Read it with the size."
+    )
+    pants_size_note: str | None = Field(
+        None, description="Free text beside the pants size. Read it with the size."
+    )
+    ring_size_note: str | None = Field(
+        None, description="Free text beside the ring size. Read it with the size."
+    )
     preferred_brands: str | None = None
     preferred_colors: str | None = None
     gift_format_preference: GiftFormat | None = Field(
@@ -203,13 +220,14 @@ class MyProfile(GiftProfile):
     )
     visibility: dict[str, Visibility] = Field(
         default_factory=dict,
-        description="Visibility per key, not per field. The seventeen keys are "
-        "display_name, bio, birth_date, shirt_size, shoe_size, pants_size, "
+        description="Visibility per key, not per field. The eighteen keys are "
+        "display_name, bio, gender, birth_date, shirt_size, shoe_size, pants_size, "
         "ring_size, preferred_brands, preferred_colors, gift_format_preference, "
         "price_comfort, interests, allergies, dietary, address, "
         "things_i_dont_want, and already_own. 'address' covers all six address "
-        "fields plus delivery_notes at once, and 'birth_date' covers birthday. "
-        "username, pronouns, avatar_url, profile_reviewed_at, wishlist_reviewed_at, "
+        "fields plus delivery_notes at once, 'birth_date' covers birthday, and "
+        "each size key covers its note too. "
+        "username, avatar_url, profile_reviewed_at, wishlist_reviewed_at, "
         "and nudges_enabled have no key: they are always public.",
     )
 
@@ -417,6 +435,21 @@ class GroupMemberDetails(BaseModel):
     shoe_size: str | None = None
     pants_size: str | None = None
     ring_size: str | None = None
+    shirt_size_note: str | None = Field(
+        None,
+        description="Free text beside the shirt size, for what one size cannot "
+        "say, such as 'L/XL'. Read it with the size: it can change which size to "
+        "buy. Hidden whenever the size is.",
+    )
+    shoe_size_note: str | None = Field(
+        None, description="Free text beside the shoe size. Read it with the size."
+    )
+    pants_size_note: str | None = Field(
+        None, description="Free text beside the pants size. Read it with the size."
+    )
+    ring_size_note: str | None = Field(
+        None, description="Free text beside the ring size. Read it with the size."
+    )
     allergies: str | None = Field(
         None,
         description="Free text, and it answers harm. Read it before suggesting "

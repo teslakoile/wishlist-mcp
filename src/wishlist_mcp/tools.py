@@ -37,6 +37,7 @@ from wishlist_mcp.schemas import (
     DeletedGroupEvent,
     DeletedItem,
     Dietary,
+    Gender,
     GiftFormat,
     GiftGuide,
     GiftProfile,
@@ -232,7 +233,7 @@ def register(mcp: FastMCP) -> None:
     def wishlist_get_my_profile() -> MyProfile:
         """Your own profile, including fields you have hidden from others, your
         birth year, and the visibility settings that hide them. Call this before
-        wishlist_update_my_profile to see the seventeen visibility keys."""
+        wishlist_update_my_profile to see the eighteen visibility keys."""
         return _my_profile(api().get("/api/v1/profiles/me"))
 
     @mcp.tool(annotations=READ)
@@ -714,13 +715,17 @@ def register(mcp: FastMCP) -> None:
     def wishlist_update_my_profile(
         display_name: str | None = None,
         bio: str | None = None,
-        pronouns: str | None = None,
+        gender: Gender | None = None,
         avatar_url: str | None = None,
         birth_date: str | None = None,
         shirt_size: str | None = None,
         shoe_size: str | None = None,
         pants_size: str | None = None,
         ring_size: str | None = None,
+        shirt_size_note: str | None = None,
+        shoe_size_note: str | None = None,
+        pants_size_note: str | None = None,
+        ring_size_note: str | None = None,
         preferred_brands: str | None = None,
         preferred_colors: str | None = None,
         gift_format_preference: GiftFormat | None = None,
@@ -744,26 +749,48 @@ def register(mcp: FastMCP) -> None:
         birth_date is an ISO-8601 date, "1990-04-17". Nobody but you is ever shown
         the year.
 
+        gender is female, male, non_binary, or other, and tells a giver which cut the sizes
+        mean. Ask the user rather than guessing it from a name.
+
+        Sizes must come from the app's lists, and anything else fails with
+        invalid_size. Shirt is a letter from XXS to 4XL. Shoe keeps its system,
+        US 4 to 15 or UK 2 to 13 in half sizes ("US 10.5", "UK 9"), or EU 34 to
+        48 ("EU 42"). Pants is a letter, a waist in inches from "24" to "44", or
+        a women's US size from "0" to "20" in steps of 2. Ring is a US size from
+        "3" to "13" in half sizes, with no prefix ("6.5"). If the user gives a
+        size in another form, such as a bare shoe "9", ask which system they
+        mean rather than guessing.
+
+        Each size has a note of up to 100 characters (shirt_size_note and the
+        rest) for anything one listed size cannot hold: two sizes ("L/XL"), a
+        range, a brand that runs small. Put the nearest listed size in the size
+        and the rest in the note. Pass an empty string to clear a note. A note
+        is shown to whoever can see its size.
+
         interests and dietary replace the whole list rather than adding to it, so
         read the current one with wishlist_get_my_profile first and send it back
         with your change folded in. At most 20 interests.
 
         visibility takes keys, not field names: {"address": "circle_only"} hides
         all six address fields and delivery_notes at once. Call
-        wishlist_get_my_profile to see the seventeen keys it accepts.
+        wishlist_get_my_profile to see the eighteen keys it accepts.
 
         avatar_url is an http or https link, or a url from wishlist_upload_image
         with purpose "avatar". Pass an empty string to remove the photo."""
         payload = _present(
             display_name=display_name,
             bio=bio,
-            pronouns=pronouns,
+            gender=gender,
             avatar_url=avatar_url,
             birth_date=birth_date,
             shirt_size=shirt_size,
             shoe_size=shoe_size,
             pants_size=pants_size,
             ring_size=ring_size,
+            shirt_size_note=shirt_size_note,
+            shoe_size_note=shoe_size_note,
+            pants_size_note=pants_size_note,
+            ring_size_note=ring_size_note,
             preferred_brands=preferred_brands,
             preferred_colors=preferred_colors,
             gift_format_preference=gift_format_preference,
